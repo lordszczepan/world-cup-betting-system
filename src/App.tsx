@@ -3,6 +3,15 @@ import './App.css'
 
 type ViewMode = 'group' | 'bracket'
 
+type TeamModelProfile = {
+  chanceCreation: number
+  finishing: number
+  defensiveShape: number
+  setPieces: number
+  tournamentExperience: number
+  volatility: number
+}
+
 type Team = {
   id: string
   name: string
@@ -26,6 +35,7 @@ type Prediction = {
   awayWinProbability: number
   homeExpectedGoals: number
   awayExpectedGoals: number
+  modelStrength: number
   summary: string
 }
 
@@ -328,6 +338,28 @@ const venueMetaByCity: Record<string, VenueMeta> = {
   Dallas: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 131 },
 }
 
+const teamProfileOverrides: Partial<Record<string, Partial<TeamModelProfile>>> = {
+  arg: { chanceCreation: 1.34, finishing: 1.31, defensiveShape: 1.26, tournamentExperience: 1.32, volatility: 0.92 },
+  bra: { chanceCreation: 1.33, finishing: 1.26, defensiveShape: 1.22, setPieces: 1.11, tournamentExperience: 1.3 },
+  esp: { chanceCreation: 1.31, finishing: 1.2, defensiveShape: 1.24, tournamentExperience: 1.24, volatility: 0.9 },
+  fra: { chanceCreation: 1.29, finishing: 1.28, defensiveShape: 1.18, setPieces: 1.13, tournamentExperience: 1.28 },
+  ger: { chanceCreation: 1.28, finishing: 1.22, defensiveShape: 1.17, setPieces: 1.14, tournamentExperience: 1.26 },
+  por: { chanceCreation: 1.24, finishing: 1.22, defensiveShape: 1.14, setPieces: 1.16, tournamentExperience: 1.2 },
+  eng: { chanceCreation: 1.26, finishing: 1.22, defensiveShape: 1.16, setPieces: 1.17, tournamentExperience: 1.18 },
+  ned: { chanceCreation: 1.2, finishing: 1.17, defensiveShape: 1.16, setPieces: 1.14, tournamentExperience: 1.16 },
+  uru: { chanceCreation: 1.14, finishing: 1.14, defensiveShape: 1.17, setPieces: 1.12, tournamentExperience: 1.2 },
+  col: { chanceCreation: 1.18, finishing: 1.12, defensiveShape: 1.13, setPieces: 1.08, tournamentExperience: 1.08 },
+  mar: { chanceCreation: 1.08, finishing: 1.06, defensiveShape: 1.18, setPieces: 1.1, tournamentExperience: 1.08 },
+  cro: { chanceCreation: 1.08, finishing: 1.04, defensiveShape: 1.11, setPieces: 1.08, tournamentExperience: 1.18 },
+  usa: { chanceCreation: 1.04, finishing: 1.02, defensiveShape: 1.01, setPieces: 1.02, tournamentExperience: 0.98, volatility: 1.02 },
+  mex: { chanceCreation: 1.02, finishing: 1.01, defensiveShape: 1.02, setPieces: 1.06, tournamentExperience: 1.04, volatility: 1.03 },
+  can: { chanceCreation: 1.03, finishing: 1.01, defensiveShape: 0.98, setPieces: 1.01, tournamentExperience: 0.94, volatility: 1.06 },
+  jpn: { chanceCreation: 1.06, finishing: 1.05, defensiveShape: 1.06, setPieces: 1.01, tournamentExperience: 1.0, volatility: 0.96 },
+  sen: { chanceCreation: 1.07, finishing: 1.05, defensiveShape: 1.08, setPieces: 1.05, tournamentExperience: 1.02 },
+  sui: { chanceCreation: 1.02, finishing: 1.0, defensiveShape: 1.07, setPieces: 1.03, tournamentExperience: 1.04, volatility: 0.95 },
+  ecu: { chanceCreation: 1.04, finishing: 1.0, defensiveShape: 1.04, setPieces: 1.02, tournamentExperience: 0.98, volatility: 0.97 },
+}
+
 const fixedRoundOf32Rules = [
   ['73', '2A', '2B'],
   ['75', '1F', '2C'],
@@ -497,6 +529,26 @@ function getDefenseStrength(team: Team) {
   return clamp(base + styleOffset, 0.65, 1.7)
 }
 
+function getTeamModelProfile(team: Team): TeamModelProfile {
+  const baseFromRating = (team.rating - 75) / 100
+  const chanceCreation = clamp(0.95 + baseFromRating + ((teamHash(team) % 5) - 2) * 0.025, 0.78, 1.35)
+  const finishing = clamp(0.94 + baseFromRating * 0.9 + (((teamHash(team) * 5) % 5) - 2) * 0.02, 0.8, 1.32)
+  const defensiveShape = clamp(0.94 + baseFromRating * 0.85 + (((teamHash(team) * 7) % 5) - 2) * 0.02, 0.8, 1.3)
+  const setPieces = clamp(0.96 + baseFromRating * 0.55 + (((teamHash(team) * 11) % 5) - 2) * 0.02, 0.82, 1.22)
+  const tournamentExperience = clamp(0.94 + baseFromRating * 0.9, 0.82, 1.28)
+  const volatility = clamp(1 + (((teamHash(team) * 13) % 7) - 3) * 0.03, 0.86, 1.16)
+  const overrides = teamProfileOverrides[team.id]
+
+  return {
+    chanceCreation: overrides?.chanceCreation ?? chanceCreation,
+    finishing: overrides?.finishing ?? finishing,
+    defensiveShape: overrides?.defensiveShape ?? defensiveShape,
+    setPieces: overrides?.setPieces ?? setPieces,
+    tournamentExperience: overrides?.tournamentExperience ?? tournamentExperience,
+    volatility: overrides?.volatility ?? volatility,
+  }
+}
+
 function getFormFactor(team: Team, attempt: number) {
   const variation = attempt * 11
   const formSeed = ((teamHash(team) + variation) % 9) - 4
@@ -557,17 +609,29 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
   const awayAttack = getAttackStrength(awayTeam)
   const homeDefense = getDefenseStrength(homeTeam)
   const awayDefense = getDefenseStrength(awayTeam)
+  const homeProfile = getTeamModelProfile(homeTeam)
+  const awayProfile = getTeamModelProfile(awayTeam)
   const formSwing = getFormFactor(homeTeam, attempt) - getFormFactor(awayTeam, attempt)
   const homeHostBoost = getHostVenueBoost(homeTeam, venueCity)
   const awayHostBoost = getHostVenueBoost(awayTeam, venueCity)
   const homeAltitudeAdjustment = getAltitudeAdjustment(homeTeam, venueCity)
   const awayAltitudeAdjustment = getAltitudeAdjustment(awayTeam, venueCity)
+  const creationSwing = homeProfile.chanceCreation - awayProfile.chanceCreation
+  const finishingSwing = homeProfile.finishing - awayProfile.finishing
+  const defensiveSwing = homeProfile.defensiveShape - awayProfile.defensiveShape
+  const setPieceSwing = homeProfile.setPieces - awayProfile.setPieces
+  const experienceSwing = homeProfile.tournamentExperience - awayProfile.tournamentExperience
   const homeExpectedGoals = clamp(
     1.18 +
       homeAttack * 0.62 -
       awayDefense * 0.33 +
       ratingGap / 90 +
       formSwing +
+      creationSwing * 0.18 +
+      finishingSwing * 0.12 +
+      setPieceSwing * 0.08 +
+      experienceSwing * 0.05 -
+      (awayProfile.defensiveShape - 1) * 0.12 +
       homeHostBoost -
       awayHostBoost * 0.4 +
       homeAltitudeAdjustment,
@@ -580,6 +644,11 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
       homeDefense * 0.31 -
       ratingGap / 105 -
       formSwing * 0.7 +
+      (awayProfile.chanceCreation - homeProfile.chanceCreation) * 0.17 +
+      (awayProfile.finishing - homeProfile.finishing) * 0.12 +
+      (awayProfile.setPieces - homeProfile.setPieces) * 0.08 +
+      (awayProfile.tournamentExperience - homeProfile.tournamentExperience) * 0.05 -
+      (homeProfile.defensiveShape - 1) * 0.12 +
       awayHostBoost -
       homeHostBoost * 0.45 +
       awayAltitudeAdjustment,
@@ -621,6 +690,16 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
   const drawPercent = roundTo(drawProbability * 100, 1)
   const awayWinPercent = roundTo(awayWinProbability * 100, 1)
   const confidence = clamp(Math.round(Math.max(homeWinPercent, drawPercent, awayWinPercent)), 40, 92)
+  const modelStrength = clamp(
+    Math.round(
+      58 +
+        Math.abs(ratingGap) * 0.45 +
+        Math.abs(creationSwing + finishingSwing + defensiveSwing + experienceSwing) * 14 +
+        Math.abs(homeHostBoost - awayHostBoost) * 20,
+    ),
+    50,
+    94,
+  )
   const outcome =
     homeGoals === awayGoals
       ? 'Draw looks plausible'
@@ -634,6 +713,10 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
       : venueMeta && venueMeta.altitudeMeters >= 1200
         ? 'This is treated as a neutral match with altitude impact.'
         : 'This is treated as a neutral-venue match.'
+  const styleContextSummary =
+    Math.abs(creationSwing) + Math.abs(finishingSwing) + Math.abs(defensiveSwing) > 0.2
+      ? 'Team-profile factors such as chance creation, finishing and defensive shape are included.'
+      : 'The team-profile layer sees these squads as relatively balanced.'
 
   return {
     homeGoals,
@@ -644,10 +727,11 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
     awayWinProbability: awayWinPercent,
     homeExpectedGoals: roundTo(homeExpectedGoals, 2),
     awayExpectedGoals: roundTo(awayExpectedGoals, 2),
+    modelStrength,
     summary:
       attempt > 0
-        ? `${outcome}. This refreshed model run uses probabilistic xG plus venue context. ${venueContextSummary}`
-        : `${outcome}. This version uses expected goals, Poisson score distribution and venue context. ${venueContextSummary}`,
+        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary}`
+        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary}`,
   }
 }
 
@@ -832,6 +916,19 @@ function App() {
     )
   }
 
+  function handleAcceptAllGroup(groupName: string) {
+    setMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.group === groupName && match.prediction
+          ? {
+              ...match,
+              acceptedPrediction: match.prediction,
+            }
+          : match,
+      ),
+    )
+  }
+
   function handleAccept(matchId: string) {
     setMatches((currentMatches) =>
       currentMatches.map((match) =>
@@ -931,6 +1028,7 @@ function App() {
             awayWinProbability: Number(match.manualAwayGoals) > Number(match.manualHomeGoals) ? 100 : 0,
             homeExpectedGoals: Number(match.manualHomeGoals),
             awayExpectedGoals: Number(match.manualAwayGoals),
+            modelStrength: 100,
             summary: 'Manual prediction entered by the user.',
           },
         }
@@ -1081,6 +1179,16 @@ function App() {
                     >
                       Try to predict Group
                     </button>
+                    <button
+                      type="button"
+                      className="secondary-button group-predict-button"
+                      onClick={() => handleAcceptAllGroup(groupDefinition.name)}
+                      disabled={
+                        !matches.some((match) => match.group === groupDefinition.name && Boolean(match.prediction))
+                      }
+                    >
+                      Accept All
+                    </button>
                     <span className="badge">
                       {
                         matches.filter(
@@ -1154,6 +1262,7 @@ function App() {
                             <span className="metric-pill">
                               xG {match.prediction.homeExpectedGoals} - {match.prediction.awayExpectedGoals}
                             </span>
+                            <span className="metric-pill">Model strength {match.prediction.modelStrength}%</span>
                           </div>
                           <p>
                             <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}

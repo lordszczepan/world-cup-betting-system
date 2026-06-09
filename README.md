@@ -25,6 +25,7 @@ npm run dev
 - most matches are treated as neutral-venue matches
 - host advantage is applied only when a host nation plays in its own country
 - high-altitude Mexican venues slightly affect the model
+- team-profile inputs such as chance creation, finishing, defensive shape and tournament experience are included
 - knockout routing for third-placed teams uses a provisional assignment layer
 - the UI is ready for a later Poules-style prediction flow with exact-score picks and pool scoring
 
