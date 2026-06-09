@@ -1,0 +1,95 @@
+:root {
+  --bg: #f3efe6;
+  --surface: rgba(255, 255, 255, 0.88);
+  --border: rgba(16, 49, 66, 0.12);
+  --table-border: rgba(16, 49, 66, 0.08);
+  --text: #35515b;
+  --text-strong: #11252d;
+  --muted: #647981;
+  --eyebrow: #a0522d;
+  --accent: #d6672f;
+  --accent-deep: #0f766e;
+  --badge-bg: rgba(214, 103, 47, 0.12);
+  --badge-text: #9a451d;
+  --shadow: 0 18px 40px rgba(11, 34, 41, 0.08);
+  --sans: 'Segoe UI', 'Trebuchet MS', sans-serif;
+  --heading: Georgia, 'Times New Roman', serif;
+
+  color: var(--text);
+  background:
+    radial-gradient(circle at top, rgba(255, 204, 102, 0.35), transparent 30%),
+    linear-gradient(180deg, #f6f1e7 0%, #f1ebe0 100%);
+  font: 16px/1.5 var(--sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.14) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.12) 1px, transparent 1px);
+  background-size: 32px 32px;
+  opacity: 0.2;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+h1,
+h2,
+h3,
+strong {
+  color: var(--text-strong);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--heading);
+  line-height: 1.05;
+}
+
+h1 {
+  font-size: clamp(2.5rem, 4vw, 4.5rem);
+  margin-bottom: 16px;
+}
+
+h2 {
+  font-size: 1.6rem;
+}
+
+h3 {
+  font-size: 1.2rem;
+}
+
+p {
+  margin: 0;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
