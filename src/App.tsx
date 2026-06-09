@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import './App.css'
 
+type ViewMode = 'group' | 'bracket'
+
 type Team = {
   id: string
   name: string
   group: string
   rating: number
+  countryCode: string
 }
 
 type GroupDefinition = {
@@ -34,6 +37,10 @@ type Match = {
   stadium: string
   homeTeam: Team
   awayTeam: Team
+  predictionAttempt?: number
+  manualEditorOpen?: boolean
+  manualHomeGoals?: string
+  manualAwayGoals?: string
   prediction?: Prediction
   acceptedPrediction?: Prediction
 }
@@ -75,110 +82,110 @@ const groupDefinitions: GroupDefinition[] = [
   {
     name: 'A',
     teams: [
-      { id: 'mex', name: 'Mexico', group: 'A', rating: 80 },
-      { id: 'rsa', name: 'South Africa', group: 'A', rating: 71 },
-      { id: 'kor', name: 'Korea Republic', group: 'A', rating: 78 },
-      { id: 'cze', name: 'Czechia', group: 'A', rating: 77 },
+      { id: 'mex', name: 'Mexico', group: 'A', rating: 80, countryCode: 'MX' },
+      { id: 'rsa', name: 'South Africa', group: 'A', rating: 71, countryCode: 'ZA' },
+      { id: 'kor', name: 'Korea Republic', group: 'A', rating: 78, countryCode: 'KR' },
+      { id: 'cze', name: 'Czechia', group: 'A', rating: 77, countryCode: 'CZ' },
     ],
   },
   {
     name: 'B',
     teams: [
-      { id: 'can', name: 'Canada', group: 'B', rating: 79 },
-      { id: 'bih', name: 'Bosnia and Herzegovina', group: 'B', rating: 74 },
-      { id: 'qat', name: 'Qatar', group: 'B', rating: 68 },
-      { id: 'sui', name: 'Switzerland', group: 'B', rating: 83 },
+      { id: 'can', name: 'Canada', group: 'B', rating: 79, countryCode: 'CA' },
+      { id: 'bih', name: 'Bosnia and Herzegovina', group: 'B', rating: 74, countryCode: 'BA' },
+      { id: 'qat', name: 'Qatar', group: 'B', rating: 68, countryCode: 'QA' },
+      { id: 'sui', name: 'Switzerland', group: 'B', rating: 83, countryCode: 'CH' },
     ],
   },
   {
     name: 'C',
     teams: [
-      { id: 'bra', name: 'Brazil', group: 'C', rating: 94 },
-      { id: 'mar', name: 'Morocco', group: 'C', rating: 84 },
-      { id: 'hai', name: 'Haiti', group: 'C', rating: 63 },
-      { id: 'sco', name: 'Scotland', group: 'C', rating: 78 },
+      { id: 'bra', name: 'Brazil', group: 'C', rating: 94, countryCode: 'BR' },
+      { id: 'mar', name: 'Morocco', group: 'C', rating: 84, countryCode: 'MA' },
+      { id: 'hai', name: 'Haiti', group: 'C', rating: 63, countryCode: 'HT' },
+      { id: 'sco', name: 'Scotland', group: 'C', rating: 78, countryCode: 'GB' },
     ],
   },
   {
     name: 'D',
     teams: [
-      { id: 'usa', name: 'United States', group: 'D', rating: 80 },
-      { id: 'par', name: 'Paraguay', group: 'D', rating: 76 },
-      { id: 'aus', name: 'Australia', group: 'D', rating: 77 },
-      { id: 'tur', name: 'Turkiye', group: 'D', rating: 81 },
+      { id: 'usa', name: 'United States', group: 'D', rating: 80, countryCode: 'US' },
+      { id: 'par', name: 'Paraguay', group: 'D', rating: 76, countryCode: 'PY' },
+      { id: 'aus', name: 'Australia', group: 'D', rating: 77, countryCode: 'AU' },
+      { id: 'tur', name: 'Turkiye', group: 'D', rating: 81, countryCode: 'TR' },
     ],
   },
   {
     name: 'E',
     teams: [
-      { id: 'ger', name: 'Germany', group: 'E', rating: 90 },
-      { id: 'cuw', name: 'Curacao', group: 'E', rating: 63 },
-      { id: 'civ', name: 'Ivory Coast', group: 'E', rating: 79 },
-      { id: 'ecu', name: 'Ecuador', group: 'E', rating: 80 },
+      { id: 'ger', name: 'Germany', group: 'E', rating: 90, countryCode: 'DE' },
+      { id: 'cuw', name: 'Curacao', group: 'E', rating: 63, countryCode: 'CW' },
+      { id: 'civ', name: 'Ivory Coast', group: 'E', rating: 79, countryCode: 'CI' },
+      { id: 'ecu', name: 'Ecuador', group: 'E', rating: 80, countryCode: 'EC' },
     ],
   },
   {
     name: 'F',
     teams: [
-      { id: 'ned', name: 'Netherlands', group: 'F', rating: 88 },
-      { id: 'jpn', name: 'Japan', group: 'F', rating: 80 },
-      { id: 'swe', name: 'Sweden', group: 'F', rating: 79 },
-      { id: 'tun', name: 'Tunisia', group: 'F', rating: 72 },
+      { id: 'ned', name: 'Netherlands', group: 'F', rating: 88, countryCode: 'NL' },
+      { id: 'jpn', name: 'Japan', group: 'F', rating: 80, countryCode: 'JP' },
+      { id: 'swe', name: 'Sweden', group: 'F', rating: 79, countryCode: 'SE' },
+      { id: 'tun', name: 'Tunisia', group: 'F', rating: 72, countryCode: 'TN' },
     ],
   },
   {
     name: 'G',
     teams: [
-      { id: 'bel', name: 'Belgium', group: 'G', rating: 84 },
-      { id: 'egy', name: 'Egypt', group: 'G', rating: 78 },
-      { id: 'irn', name: 'Iran', group: 'G', rating: 74 },
-      { id: 'nzl', name: 'New Zealand', group: 'G', rating: 67 },
+      { id: 'bel', name: 'Belgium', group: 'G', rating: 84, countryCode: 'BE' },
+      { id: 'egy', name: 'Egypt', group: 'G', rating: 78, countryCode: 'EG' },
+      { id: 'irn', name: 'Iran', group: 'G', rating: 74, countryCode: 'IR' },
+      { id: 'nzl', name: 'New Zealand', group: 'G', rating: 67, countryCode: 'NZ' },
     ],
   },
   {
     name: 'H',
     teams: [
-      { id: 'esp', name: 'Spain', group: 'H', rating: 91 },
-      { id: 'cpv', name: 'Cape Verde', group: 'H', rating: 71 },
-      { id: 'ksa', name: 'Saudi Arabia', group: 'H', rating: 70 },
-      { id: 'uru', name: 'Uruguay', group: 'H', rating: 84 },
+      { id: 'esp', name: 'Spain', group: 'H', rating: 91, countryCode: 'ES' },
+      { id: 'cpv', name: 'Cape Verde', group: 'H', rating: 71, countryCode: 'CV' },
+      { id: 'ksa', name: 'Saudi Arabia', group: 'H', rating: 70, countryCode: 'SA' },
+      { id: 'uru', name: 'Uruguay', group: 'H', rating: 84, countryCode: 'UY' },
     ],
   },
   {
     name: 'I',
     teams: [
-      { id: 'fra', name: 'France', group: 'I', rating: 92 },
-      { id: 'sen', name: 'Senegal', group: 'I', rating: 82 },
-      { id: 'irq', name: 'Iraq', group: 'I', rating: 66 },
-      { id: 'nor', name: 'Norway', group: 'I', rating: 81 },
+      { id: 'fra', name: 'France', group: 'I', rating: 92, countryCode: 'FR' },
+      { id: 'sen', name: 'Senegal', group: 'I', rating: 82, countryCode: 'SN' },
+      { id: 'irq', name: 'Iraq', group: 'I', rating: 66, countryCode: 'IQ' },
+      { id: 'nor', name: 'Norway', group: 'I', rating: 81, countryCode: 'NO' },
     ],
   },
   {
     name: 'J',
     teams: [
-      { id: 'arg', name: 'Argentina', group: 'J', rating: 93 },
-      { id: 'alg', name: 'Algeria', group: 'J', rating: 78 },
-      { id: 'aut', name: 'Austria', group: 'J', rating: 81 },
-      { id: 'jor', name: 'Jordan', group: 'J', rating: 69 },
+      { id: 'arg', name: 'Argentina', group: 'J', rating: 93, countryCode: 'AR' },
+      { id: 'alg', name: 'Algeria', group: 'J', rating: 78, countryCode: 'DZ' },
+      { id: 'aut', name: 'Austria', group: 'J', rating: 81, countryCode: 'AT' },
+      { id: 'jor', name: 'Jordan', group: 'J', rating: 69, countryCode: 'JO' },
     ],
   },
   {
     name: 'K',
     teams: [
-      { id: 'por', name: 'Portugal', group: 'K', rating: 88 },
-      { id: 'cod', name: 'DR Congo', group: 'K', rating: 74 },
-      { id: 'uzb', name: 'Uzbekistan', group: 'K', rating: 72 },
-      { id: 'col', name: 'Colombia', group: 'K', rating: 85 },
+      { id: 'por', name: 'Portugal', group: 'K', rating: 88, countryCode: 'PT' },
+      { id: 'cod', name: 'DR Congo', group: 'K', rating: 74, countryCode: 'CD' },
+      { id: 'uzb', name: 'Uzbekistan', group: 'K', rating: 72, countryCode: 'UZ' },
+      { id: 'col', name: 'Colombia', group: 'K', rating: 85, countryCode: 'CO' },
     ],
   },
   {
     name: 'L',
     teams: [
-      { id: 'eng', name: 'England', group: 'L', rating: 89 },
-      { id: 'cro', name: 'Croatia', group: 'L', rating: 82 },
-      { id: 'gha', name: 'Ghana', group: 'L', rating: 72 },
-      { id: 'pan', name: 'Panama', group: 'L', rating: 69 },
-    ],
+      { id: 'eng', name: 'England', group: 'L', rating: 89, countryCode: 'GB' },
+      { id: 'cro', name: 'Croatia', group: 'L', rating: 82, countryCode: 'HR' },
+      { id: 'gha', name: 'Ghana', group: 'L', rating: 72, countryCode: 'GH' },
+      { id: 'pan', name: 'Panama', group: 'L', rating: 69, countryCode: 'PA' },
+  ],
   },
 ]
 
@@ -412,6 +419,18 @@ function formatDateTime(date: Date, timeZone: string) {
   return { dateLabel, timeLabel }
 }
 
+function getFlagUrl(team: Team) {
+  if (team.id === 'eng') {
+    return 'https://upload.wikimedia.org/wikipedia/en/b/be/Flag_of_England.svg'
+  }
+
+  if (team.id === 'sco') {
+    return 'https://upload.wikimedia.org/wikipedia/commons/1/10/Flag_of_Scotland.svg'
+  }
+
+  return `https://flagcdn.com/${team.countryCode.toLowerCase()}.svg`
+}
+
 function createInitialMatches(): Match[] {
   return groupDefinitions.flatMap((groupDefinition) =>
     groupMatchTemplate.map(([homeIndex, awayIndex, kickoffLabel], roundIndex) => {
@@ -449,10 +468,11 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
 
-function predictMatch(homeTeam: Team, awayTeam: Team): Prediction {
+function predictMatch(homeTeam: Team, awayTeam: Team, attempt = 0): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
-  const homeNoise = ((teamHash(homeTeam) + teamHash(awayTeam)) % 5) * 0.12
-  const awayNoise = ((teamHash(awayTeam) + teamHash(homeTeam) * 2) % 5) * 0.1
+  const variation = attempt * 17
+  const homeNoise = ((teamHash(homeTeam) + teamHash(awayTeam) + variation) % 5) * 0.12
+  const awayNoise = ((teamHash(awayTeam) + teamHash(homeTeam) * 2 + variation) % 5) * 0.1
   const homeExpectedGoals = clamp(1.1 + ratingGap / 18 + homeNoise, 0.2, 3.7)
   const awayExpectedGoals = clamp(1.0 - ratingGap / 22 + awayNoise, 0.2, 3.3)
 
@@ -483,7 +503,10 @@ function predictMatch(homeTeam: Team, awayTeam: Team): Prediction {
     homeGoals,
     awayGoals,
     confidence,
-    summary: `${outcome}. This is still a simple strength-based baseline model.`,
+    summary:
+      attempt > 0
+        ? `${outcome}. This refreshed model run explores a slightly different scenario.`
+        : `${outcome}. This is still a simple strength-based baseline model.`,
   }
 }
 
@@ -624,6 +647,7 @@ function buildRoundOf32(standings: Record<string, Standing[]>, rankedThirds: Ran
 
 function App() {
   const [matches, setMatches] = useState<Match[]>(createInitialMatches)
+  const [activeView, setActiveView] = useState<ViewMode>('group')
   const standings = buildStandings(matches)
   const rankedThirds = rankThirdPlacedTeams(standings)
   const roundOf32 = buildRoundOf32(standings, rankedThirds)
@@ -633,12 +657,37 @@ function App() {
     setMatches((currentMatches) =>
       currentMatches.map((match) =>
         match.id === matchId
-          ? {
-              ...match,
-              prediction: predictMatch(match.homeTeam, match.awayTeam),
-            }
+          ? (() => {
+              const nextAttempt = (match.predictionAttempt ?? 0) + 1
+
+              return {
+                ...match,
+                predictionAttempt: nextAttempt,
+                manualEditorOpen: false,
+                prediction: predictMatch(match.homeTeam, match.awayTeam, nextAttempt),
+              }
+            })()
           : match,
       ),
+    )
+  }
+
+  function handleTryToPredictGroup(groupName: string) {
+    setMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.group !== groupName) {
+          return match
+        }
+
+        const nextAttempt = (match.predictionAttempt ?? 0) + 1
+
+        return {
+          ...match,
+          predictionAttempt: nextAttempt,
+          manualEditorOpen: false,
+          prediction: predictMatch(match.homeTeam, match.awayTeam, nextAttempt),
+        }
+      }),
     )
   }
 
@@ -657,6 +706,90 @@ function App() {
 
   function handleReset() {
     setMatches(createInitialMatches())
+  }
+
+  function handleResetMatch(matchId: string) {
+    setMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === matchId
+          ? {
+              ...match,
+              predictionAttempt: 0,
+              manualEditorOpen: false,
+              manualHomeGoals: '',
+              manualAwayGoals: '',
+              prediction: undefined,
+              acceptedPrediction: undefined,
+            }
+          : match,
+      ),
+    )
+  }
+
+  function handleToggleManualEditor(matchId: string) {
+    setMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.id !== matchId) {
+          return match
+        }
+
+        const resultToPrefill = match.acceptedPrediction ?? match.prediction
+
+        return {
+          ...match,
+          manualEditorOpen: !match.manualEditorOpen,
+          manualHomeGoals: resultToPrefill ? String(resultToPrefill.homeGoals) : (match.manualHomeGoals ?? ''),
+          manualAwayGoals: resultToPrefill ? String(resultToPrefill.awayGoals) : (match.manualAwayGoals ?? ''),
+        }
+      }),
+    )
+  }
+
+  function handleManualScoreChange(matchId: string, side: 'home' | 'away', value: string) {
+    if (!/^\d{0,2}$/.test(value)) {
+      return
+    }
+
+    setMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === matchId
+          ? {
+              ...match,
+              manualHomeGoals: side === 'home' ? value : (match.manualHomeGoals ?? ''),
+              manualAwayGoals: side === 'away' ? value : (match.manualAwayGoals ?? ''),
+            }
+          : match,
+      ),
+    )
+  }
+
+  function handleSaveManualPrediction(matchId: string) {
+    setMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.id !== matchId) {
+          return match
+        }
+
+        if (match.manualHomeGoals === undefined || match.manualAwayGoals === undefined) {
+          return match
+        }
+
+        if (match.manualHomeGoals === '' || match.manualAwayGoals === '') {
+          return match
+        }
+
+        return {
+          ...match,
+          manualEditorOpen: false,
+          prediction: {
+            homeGoals: Number(match.manualHomeGoals),
+            awayGoals: Number(match.manualAwayGoals),
+            confidence: 100,
+            summary: 'Manual prediction entered by the user.',
+          },
+        }
+      }),
+    )
   }
 
   return (
@@ -705,117 +838,25 @@ function App() {
         </article>
       </section>
 
-      <section className="layout-grid">
-        <div className="panel">
-          <div className="section-header">
-            <div>
-              <p className="eyebrow">Group stage</p>
-              <h2>All 72 group matches</h2>
-            </div>
-            <span className="badge">12 groups</span>
-          </div>
+      <section className="view-switcher">
+        <button
+          type="button"
+          className={`tab-button ${activeView === 'group' ? 'tab-button-active' : ''}`}
+          onClick={() => setActiveView('group')}
+        >
+          Group Phase
+        </button>
+        <button
+          type="button"
+          className={`tab-button ${activeView === 'bracket' ? 'tab-button-active' : ''}`}
+          onClick={() => setActiveView('bracket')}
+        >
+          Bracket Phase
+        </button>
+      </section>
 
-          <div className="group-list">
-            {groupDefinitions.map((groupDefinition) => (
-              <section key={groupDefinition.name} className="group-card">
-                <div className="group-card-header">
-                  <div>
-                    <p className="eyebrow">Group {groupDefinition.name}</p>
-                    <h3>
-                      {groupDefinition.teams.map((team) => team.name).join(' | ')}
-                    </h3>
-                  </div>
-                  <span className="badge">
-                    {
-                      matches.filter(
-                        (match) => match.group === groupDefinition.name && Boolean(match.acceptedPrediction),
-                      ).length
-                    }
-                    /6 accepted
-                  </span>
-                </div>
-
-                <div className="match-list">
-                  {matches
-                    .filter((match) => match.group === groupDefinition.name)
-                    .map((match) => (
-                      <article key={match.id} className="match-card">
-                        <div className="match-meta">
-                          <span>{match.kickoffLabel}</span>
-                          <span>Group {match.group} / Match {match.round}</span>
-                        </div>
-
-                        <div className="schedule-box">
-                          <div>
-                            <strong>{match.venueCity}</strong>
-                            <span>{match.stadium}</span>
-                          </div>
-                          <div>
-                            <strong>Local</strong>
-                            <span>
-                              {match.localDateLabel} / {match.localTimeLabel}
-                            </span>
-                          </div>
-                          <div>
-                            <strong>Poland</strong>
-                            <span>
-                              {match.polishDateLabel} / {match.polishTimeLabel}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div className="match-teams">
-                          <div>
-                            <strong>{match.homeTeam.name}</strong>
-                            <span>rating {match.homeTeam.rating}</span>
-                          </div>
-                          <div className="score-pill">
-                            {match.acceptedPrediction
-                              ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}`
-                              : match.prediction
-                                ? `${match.prediction.homeGoals} : ${match.prediction.awayGoals}`
-                                : 'vs'}
-                          </div>
-                          <div>
-                            <strong>{match.awayTeam.name}</strong>
-                            <span>rating {match.awayTeam.rating}</span>
-                          </div>
-                        </div>
-
-                        {match.prediction ? (
-                          <div className="prediction-box">
-                            <p>
-                              <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
-                            </p>
-                          </div>
-                        ) : (
-                          <div className="prediction-box prediction-box-muted">
-                            <p>Generate a baseline score first, then accept it into the standings.</p>
-                          </div>
-                        )}
-
-                        <div className="action-row">
-                          <button type="button" className="primary-button" onClick={() => handleTryToPredict(match.id)}>
-                            Try to predict
-                          </button>
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => handleAccept(match.id)}
-                            disabled={!match.prediction}
-                          >
-                            Accept
-                          </button>
-                        </div>
-                      </article>
-                    ))}
-                </div>
-              </section>
-            ))}
-          </div>
-        </div>
-
-        <aside className="sidebar">
+      {activeView === 'group' ? (
+        <>
           <section className="panel">
             <div className="section-header">
               <div>
@@ -824,7 +865,7 @@ function App() {
               </div>
             </div>
 
-            <div className="standings-list">
+            <div className="standings-grid">
               {groupDefinitions.map((groupDefinition) => (
                 <section key={groupDefinition.name} className="standings-card">
                   <div className="standings-header">
@@ -844,7 +885,12 @@ function App() {
                       {(standings[groupDefinition.name] ?? []).map((row, index) => (
                         <tr key={row.team.id}>
                           <td>{index + 1}</td>
-                          <td>{row.team.name}</td>
+                          <td>
+                            <span className="table-team">
+                              <img className="team-flag" src={getFlagUrl(row.team)} alt={`Flag of ${row.team.name}`} />
+                              <span>{row.team.name}</span>
+                            </span>
+                          </td>
                           <td>{row.points}</td>
                           <td>{row.goalDifference}</td>
                           <td>{row.played}</td>
@@ -860,106 +906,292 @@ function App() {
           <section className="panel">
             <div className="section-header">
               <div>
-                <p className="eyebrow">Wild cards</p>
-                <h2>Best third-placed teams</h2>
+                <p className="eyebrow">Group stage</p>
+                <h2>All 72 group matches</h2>
               </div>
+              <span className="badge">paired by round</span>
             </div>
 
-            <div className="bracket-list">
-              {rankedThirds.map((row) => (
-                <article key={row.team.id} className="bracket-card">
-                  <span>
-                    Rank {row.rank} / Group {row.team.group}
-                  </span>
-                  <strong>{row.team.name}</strong>
-                  <p>
-                    {row.points} pts, GD {row.goalDifference}, GF {row.goalsFor}
-                  </p>
-                </article>
+            <div className="group-list">
+              {groupDefinitions.map((groupDefinition) => (
+                <section key={groupDefinition.name} className="group-card">
+                  <div className="group-card-header">
+                  <div>
+                    <p className="eyebrow">Group {groupDefinition.name}</p>
+                    <div className="group-team-list" aria-label={`Teams in group ${groupDefinition.name}`}>
+                        {groupDefinition.teams.map((team) => (
+                          <span key={team.id} className="table-team">
+                            <img className="team-flag" src={getFlagUrl(team)} alt={`Flag of ${team.name}`} />
+                            <span>{team.name}</span>
+                      </span>
+                    ))}
+                  </div>
+                  </div>
+                  <div className="group-actions">
+                    <button
+                      type="button"
+                      className="secondary-button group-predict-button"
+                      onClick={() => handleTryToPredictGroup(groupDefinition.name)}
+                    >
+                      Try to predict Group
+                    </button>
+                    <span className="badge">
+                      {
+                        matches.filter(
+                          (match) => match.group === groupDefinition.name && Boolean(match.acceptedPrediction),
+                        ).length
+                      }
+                      /6 accepted
+                    </span>
+                  </div>
+                </div>
+
+                  <div className="match-list">
+                    {matches
+                      .filter((match) => match.group === groupDefinition.name)
+                      .map((match) => (
+                        <article key={match.id} className="match-card">
+                          <div className="match-meta">
+                            <span>{match.kickoffLabel}</span>
+                            <span>Group {match.group} / Match {match.round}</span>
+                          </div>
+
+                          <div className="schedule-box">
+                            <div>
+                              <strong>{match.venueCity}</strong>
+                              <span>{match.stadium}</span>
+                            </div>
+                            <div>
+                              <strong>Local</strong>
+                              <span>
+                                {match.localDateLabel} / {match.localTimeLabel}
+                              </span>
+                            </div>
+                            <div>
+                              <strong>Poland</strong>
+                              <span>
+                                {match.polishDateLabel} / {match.polishTimeLabel}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="match-teams">
+                            <div className="team-entry">
+                              <strong className="team-name">
+                                <img className="team-flag" src={getFlagUrl(match.homeTeam)} alt={`Flag of ${match.homeTeam.name}`} />
+                                <span>{match.homeTeam.name}</span>
+                              </strong>
+                              <span>rating {match.homeTeam.rating}</span>
+                            </div>
+                            <div className="score-pill">
+                              {match.acceptedPrediction
+                                ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}`
+                                : match.prediction
+                                  ? `${match.prediction.homeGoals} : ${match.prediction.awayGoals}`
+                                  : 'vs'}
+                            </div>
+                            <div className="team-entry">
+                              <strong className="team-name">
+                                <img className="team-flag" src={getFlagUrl(match.awayTeam)} alt={`Flag of ${match.awayTeam.name}`} />
+                                <span>{match.awayTeam.name}</span>
+                              </strong>
+                              <span>rating {match.awayTeam.rating}</span>
+                            </div>
+                          </div>
+
+                      {match.prediction ? (
+                        <div className="prediction-box">
+                          <p>
+                                <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
+                              </p>
+                            </div>
+                          ) : (
+                          <div className="prediction-box prediction-box-muted">
+                            <p>Generate a baseline score first, then accept it into the standings.</p>
+                          </div>
+                        )}
+
+                      {match.manualEditorOpen ? (
+                        <div className="manual-entry-box">
+                          <div className="manual-score-row">
+                            <label className="manual-score-field">
+                              <span>{match.homeTeam.name}</span>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={match.manualHomeGoals ?? ''}
+                                onChange={(event) => handleManualScoreChange(match.id, 'home', event.target.value)}
+                              />
+                            </label>
+                            <label className="manual-score-field">
+                              <span>{match.awayTeam.name}</span>
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={match.manualAwayGoals ?? ''}
+                                onChange={(event) => handleManualScoreChange(match.id, 'away', event.target.value)}
+                              />
+                            </label>
+                          </div>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleSaveManualPrediction(match.id)}
+                            disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
+                          >
+                            Save manual prediction
+                          </button>
+                        </div>
+                      ) : null}
+
+                      <div className="action-row">
+                        <button type="button" className="primary-button" onClick={() => handleTryToPredict(match.id)}>
+                          {match.prediction ? 'Predict again' : 'Try to predict'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleToggleManualEditor(match.id)}
+                        >
+                          {match.manualEditorOpen ? 'Close manual entry' : 'Manual prediction'}
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleAccept(match.id)}
+                          disabled={!match.prediction}
+                        >
+                          Accept
+                        </button>
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={() => handleResetMatch(match.id)}
+                          disabled={
+                            !match.prediction &&
+                            !match.acceptedPrediction &&
+                            !match.manualHomeGoals &&
+                            !match.manualAwayGoals
+                          }
+                        >
+                          Reset
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                  </div>
+                </section>
               ))}
             </div>
           </section>
-
-          <section className="panel">
-            <div className="section-header">
-              <div>
-                <p className="eyebrow">Round of 32</p>
-                <h2>2026 knockout entry bracket</h2>
+        </>
+      ) : (
+        <section className="layout-grid layout-grid-bottom">
+          <aside className="sidebar">
+            <section className="panel">
+              <div className="section-header">
+                <div>
+                  <p className="eyebrow">Wild cards</p>
+                  <h2>Best third-placed teams</h2>
+                </div>
               </div>
-            </div>
 
-            <div className="bracket-list">
-              {roundOf32.map((match) => (
-                <article key={match.id} className="bracket-card">
-                  <span>{match.label}</span>
-                  <strong>
-                    {match.homeSlot} {match.homeTeam}
-                  </strong>
-                  <strong>
-                    {match.awaySlot} {match.awayTeam}
-                  </strong>
-                  {match.note ? <p>{match.note}</p> : null}
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <section className="panel">
-            <div className="section-header">
-              <div>
-                <p className="eyebrow">Knockout path</p>
-                <h2>Later rounds scaffold</h2>
-              </div>
-            </div>
-
-            <div className="path-grid">
-              <div className="path-column">
-                <h3>Round of 16</h3>
-                {knockoutPath.roundOf16.map(([id, homeSlot, awaySlot]) => (
-                  <article key={id} className="path-card">
-                    <span>Match {id}</span>
-                    <strong>
-                      {homeSlot} vs {awaySlot}
-                    </strong>
+              <div className="bracket-list">
+                {rankedThirds.map((row) => (
+                  <article key={row.team.id} className="bracket-card">
+                    <span>
+                      Rank {row.rank} / Group {row.team.group}
+                    </span>
+                    <strong>{row.team.name}</strong>
+                    <p>
+                      {row.points} pts, GD {row.goalDifference}, GF {row.goalsFor}
+                    </p>
                   </article>
                 ))}
               </div>
+            </section>
 
-              <div className="path-column">
-                <h3>Quarter-finals</h3>
-                {knockoutPath.quarterFinals.map(([id, homeSlot, awaySlot]) => (
-                  <article key={id} className="path-card">
-                    <span>Match {id}</span>
+            <section className="panel">
+              <div className="section-header">
+                <div>
+                  <p className="eyebrow">Round of 32</p>
+                  <h2>2026 knockout entry bracket</h2>
+                </div>
+              </div>
+
+              <div className="bracket-list">
+                {roundOf32.map((match) => (
+                  <article key={match.id} className="bracket-card">
+                    <span>{match.label}</span>
                     <strong>
-                      {homeSlot} vs {awaySlot}
+                      {match.homeSlot} {match.homeTeam}
                     </strong>
+                    <strong>
+                      {match.awaySlot} {match.awayTeam}
+                    </strong>
+                    {match.note ? <p>{match.note}</p> : null}
                   </article>
                 ))}
               </div>
+            </section>
 
-              <div className="path-column">
-                <h3>Semi-finals and finals</h3>
-                {knockoutPath.semiFinals.map(([id, homeSlot, awaySlot]) => (
-                  <article key={id} className="path-card">
-                    <span>Match {id}</span>
-                    <strong>
-                      {homeSlot} vs {awaySlot}
-                    </strong>
-                  </article>
-                ))}
-                {knockoutPath.finals.map(([id, homeSlot, awaySlot, label]) => (
-                  <article key={id} className="path-card">
-                    <span>{label}</span>
-                    <strong>
-                      {homeSlot} vs {awaySlot}
-                    </strong>
-                  </article>
-                ))}
+            <section className="panel">
+              <div className="section-header">
+                <div>
+                  <p className="eyebrow">Knockout path</p>
+                  <h2>Later rounds scaffold</h2>
+                </div>
               </div>
-            </div>
-          </section>
-        </aside>
-      </section>
+
+              <div className="path-grid">
+                <div className="path-column">
+                  <h3>Round of 16</h3>
+                  {knockoutPath.roundOf16.map(([id, homeSlot, awaySlot]) => (
+                    <article key={id} className="path-card">
+                      <span>Match {id}</span>
+                      <strong>
+                        {homeSlot} vs {awaySlot}
+                      </strong>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="path-column">
+                  <h3>Quarter-finals</h3>
+                  {knockoutPath.quarterFinals.map(([id, homeSlot, awaySlot]) => (
+                    <article key={id} className="path-card">
+                      <span>Match {id}</span>
+                      <strong>
+                        {homeSlot} vs {awaySlot}
+                      </strong>
+                    </article>
+                  ))}
+                </div>
+
+                <div className="path-column">
+                  <h3>Semi-finals and finals</h3>
+                  {knockoutPath.semiFinals.map(([id, homeSlot, awaySlot]) => (
+                    <article key={id} className="path-card">
+                      <span>Match {id}</span>
+                      <strong>
+                        {homeSlot} vs {awaySlot}
+                      </strong>
+                    </article>
+                  ))}
+                  {knockoutPath.finals.map(([id, homeSlot, awaySlot, label]) => (
+                    <article key={id} className="path-card">
+                      <span>{label}</span>
+                      <strong>
+                        {homeSlot} vs {awaySlot}
+                      </strong>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            </section>
+          </aside>
+        </section>
+      )}
     </main>
   )
 }

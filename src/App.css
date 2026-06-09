@@ -38,6 +38,7 @@
 .group-list,
 .match-list,
 .standings-list,
+.standings-grid,
 .bracket-list,
 .sidebar,
 .path-grid {
@@ -90,6 +91,42 @@
   align-items: start;
 }
 
+.layout-grid-bottom {
+  margin-top: 0;
+}
+
+.view-switcher {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.tab-button {
+  border: 1px solid rgba(8, 28, 54, 0.12);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--text-strong);
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    transform 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.tab-button:hover {
+  transform: translateY(-1px);
+}
+
+.tab-button-active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  color: white;
+  border-color: transparent;
+}
+
 .panel,
 .info-card,
 .group-card,
@@ -118,9 +155,25 @@
   gap: 12px;
 }
 
+.group-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.group-predict-button {
+  white-space: nowrap;
+}
+
 .group-card {
   padding: 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 245, 239, 0.98));
+}
+
+.standings-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .match-card {
@@ -187,6 +240,42 @@
   color: var(--text-strong);
 }
 
+.team-entry {
+  min-width: 0;
+}
+
+.group-team-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.match-list {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.team-name,
+.table-team {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team-flag {
+  width: 22px;
+  height: 16px;
+  object-fit: cover;
+  border-radius: 3px;
+  border: 1px solid rgba(8, 28, 54, 0.12);
+  flex-shrink: 0;
+  background: white;
+}
+
+.table-team {
+  font-weight: 600;
+  color: var(--text-strong);
+}
+
 .match-teams > div:last-child {
   text-align: right;
 }
@@ -212,10 +301,41 @@
   border-color: rgba(8, 28, 54, 0.08);
 }
 
+.manual-entry-box {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(214, 103, 47, 0.08);
+  border: 1px solid rgba(214, 103, 47, 0.14);
+}
+
+.manual-score-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.manual-score-field {
+  display: grid;
+  gap: 6px;
+  font-size: 0.92rem;
+  color: var(--text-strong);
+}
+
+.manual-score-field input {
+  border: 1px solid rgba(8, 28, 54, 0.14);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--text-strong);
+}
+
 .action-row {
   display: flex;
   gap: 12px;
   margin-top: 14px;
+  flex-wrap: wrap;
 }
 
 .primary-button,
@@ -310,7 +430,8 @@ tbody tr:last-child td {
   .hero-panel,
   .layout-grid,
   .info-grid,
-  .path-grid {
+  .path-grid,
+  .standings-grid {
     grid-template-columns: 1fr;
   }
 }
@@ -340,7 +461,15 @@ tbody tr:last-child td {
     grid-template-columns: 1fr;
   }
 
+  .match-list {
+    grid-template-columns: 1fr;
+  }
+
   .schedule-box {
+    grid-template-columns: 1fr;
+  }
+
+  .manual-score-row {
     grid-template-columns: 1fr;
   }
 
@@ -360,8 +489,18 @@ tbody tr:last-child td {
     align-items: stretch;
   }
 
+  .group-actions {
+    justify-content: stretch;
+  }
+
+  .view-switcher {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .primary-button,
-  .secondary-button {
+  .secondary-button,
+  .tab-button {
     width: 100%;
   }
 }
