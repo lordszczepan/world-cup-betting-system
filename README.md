@@ -1,32 +1,34 @@
 # World Cup Betting System
 
-Przegladarkowy MVP do symulowania fazy grupowej mistrzostw swiata w pilce noznej.
+Browser MVP for simulating the 2026 FIFA World Cup format.
 
-## Co potrafi teraz
+## What it does now
 
-- pokazuje mecze fazy grupowej w ukladzie grup `A-H`
-- ma przycisk `Try to predict`, ktory tworzy prosta predykcje wyniku
-- ma przycisk `Accept`, ktory zatwierdza wynik do tabeli
-- automatycznie liczy punkty, bilans bramek i kolejnosc w grupach
-- automatycznie ustawia druzyny w drabince `Round of 16`
+- models the 2026 structure with 12 groups from `A` to `L`
+- shows all 72 group-stage matches
+- generates a baseline prediction with `Try to predict`
+- accepts the prediction into standings with `Accept`
+- calculates group tables automatically
+- ranks all third-placed teams and promotes the best eight
+- builds a `Round of 32` bracket scaffold plus later knockout rounds
 
-## Jak uruchomic
+## Run locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Obecne zalozenia
+## Current assumptions
 
-- dane druzyn sa demonstracyjne
-- model predykcyjny jest prosty i bazuje na recznie wpisanym ratingu sily zespolu
-- celem tej wersji jest sprawdzenie przeplywu produktu, a nie dokladnosci typowania
+- the prediction engine is still a simple strength-rating baseline
+- knockout routing for third-placed teams uses a provisional assignment layer
+- the UI is ready for a later Poules-style prediction flow with exact-score picks and pool scoring
 
-## Rozsadny kierunek rozwoju
+## Good next steps
 
-1. podpiac prawdziwy terminarz i sklady grup
-2. pobierac aktualne statystyki druzyn z API
-3. dodac mozliwosc recznej edycji lub odrzucenia predykcji
-4. rozszerzyc drabinke o cwiercfinaly, polfinaly i final
-5. dodac historie symulacji i porownywanie wielu scenariuszy
+1. replace the baseline model with a data-driven predictor
+2. add exact-score entry and points logic inspired by bracket pool products
+3. implement the full official FIFA Annex C third-place routing matrix
+4. store simulations so one user can compare multiple tournament scenarios
+5. add knockout match prediction once group qualification is locked
