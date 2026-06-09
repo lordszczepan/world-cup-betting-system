@@ -9,6 +9,7 @@ type Team = {
   group: string
   rating: number
   countryCode: string
+  hostCountry?: 'MX' | 'CA' | 'US'
 }
 
 type GroupDefinition = {
@@ -20,6 +21,11 @@ type Prediction = {
   homeGoals: number
   awayGoals: number
   confidence: number
+  homeWinProbability: number
+  drawProbability: number
+  awayWinProbability: number
+  homeExpectedGoals: number
+  awayExpectedGoals: number
   summary: string
 }
 
@@ -78,11 +84,17 @@ type RawScheduleItem = {
   venue: string
 }
 
+type VenueMeta = {
+  countryCode: 'MX' | 'CA' | 'US'
+  timeZone: string
+  altitudeMeters: number
+}
+
 const groupDefinitions: GroupDefinition[] = [
   {
     name: 'A',
     teams: [
-      { id: 'mex', name: 'Mexico', group: 'A', rating: 80, countryCode: 'MX' },
+      { id: 'mex', name: 'Mexico', group: 'A', rating: 80, countryCode: 'MX', hostCountry: 'MX' },
       { id: 'rsa', name: 'South Africa', group: 'A', rating: 71, countryCode: 'ZA' },
       { id: 'kor', name: 'Korea Republic', group: 'A', rating: 78, countryCode: 'KR' },
       { id: 'cze', name: 'Czechia', group: 'A', rating: 77, countryCode: 'CZ' },
@@ -91,7 +103,7 @@ const groupDefinitions: GroupDefinition[] = [
   {
     name: 'B',
     teams: [
-      { id: 'can', name: 'Canada', group: 'B', rating: 79, countryCode: 'CA' },
+      { id: 'can', name: 'Canada', group: 'B', rating: 79, countryCode: 'CA', hostCountry: 'CA' },
       { id: 'bih', name: 'Bosnia and Herzegovina', group: 'B', rating: 74, countryCode: 'BA' },
       { id: 'qat', name: 'Qatar', group: 'B', rating: 68, countryCode: 'QA' },
       { id: 'sui', name: 'Switzerland', group: 'B', rating: 83, countryCode: 'CH' },
@@ -109,7 +121,7 @@ const groupDefinitions: GroupDefinition[] = [
   {
     name: 'D',
     teams: [
-      { id: 'usa', name: 'United States', group: 'D', rating: 80, countryCode: 'US' },
+      { id: 'usa', name: 'United States', group: 'D', rating: 80, countryCode: 'US', hostCountry: 'US' },
       { id: 'par', name: 'Paraguay', group: 'D', rating: 76, countryCode: 'PY' },
       { id: 'aus', name: 'Australia', group: 'D', rating: 77, countryCode: 'AU' },
       { id: 'tur', name: 'Turkiye', group: 'D', rating: 81, countryCode: 'TR' },
@@ -297,23 +309,23 @@ const groupScheduleSource: Record<string, RawScheduleItem[]> = {
   ],
 }
 
-const venueTimeZones: Record<string, string> = {
-  'Mexico City': 'America/Mexico_City',
-  Guadalajara: 'America/Mexico_City',
-  Monterrey: 'America/Monterrey',
-  Atlanta: 'America/New_York',
-  Toronto: 'America/Toronto',
-  'San Francisco Bay Area': 'America/Los_Angeles',
-  'Los Angeles': 'America/Los_Angeles',
-  Vancouver: 'America/Vancouver',
-  Seattle: 'America/Los_Angeles',
-  'New York/New Jersey': 'America/New_York',
-  Boston: 'America/New_York',
-  Philadelphia: 'America/New_York',
-  Miami: 'America/New_York',
-  Houston: 'America/Chicago',
-  'Kansas City': 'America/Chicago',
-  Dallas: 'America/Chicago',
+const venueMetaByCity: Record<string, VenueMeta> = {
+  'Mexico City': { countryCode: 'MX', timeZone: 'America/Mexico_City', altitudeMeters: 2240 },
+  Guadalajara: { countryCode: 'MX', timeZone: 'America/Mexico_City', altitudeMeters: 1560 },
+  Monterrey: { countryCode: 'MX', timeZone: 'America/Monterrey', altitudeMeters: 540 },
+  Atlanta: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 320 },
+  Toronto: { countryCode: 'CA', timeZone: 'America/Toronto', altitudeMeters: 75 },
+  'San Francisco Bay Area': { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 15 },
+  'Los Angeles': { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 90 },
+  Vancouver: { countryCode: 'CA', timeZone: 'America/Vancouver', altitudeMeters: 70 },
+  Seattle: { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 50 },
+  'New York/New Jersey': { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 5 },
+  Boston: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 45 },
+  Philadelphia: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 12 },
+  Miami: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 2 },
+  Houston: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 13 },
+  'Kansas City': { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 270 },
+  Dallas: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 131 },
 }
 
 const fixedRoundOf32Rules = [
@@ -437,7 +449,7 @@ function createInitialMatches(): Match[] {
       const scheduleItem = groupScheduleSource[groupDefinition.name][roundIndex]
       const kickoff = parseEtDateTime(scheduleItem.date, scheduleItem.et)
       const [venueCity, stadium] = scheduleItem.venue.split('|').map((part) => part.trim())
-      const localTimeZone = venueTimeZones[venueCity] ?? 'UTC'
+      const localTimeZone = venueMetaByCity[venueCity]?.timeZone ?? 'UTC'
       const localDateTime = formatDateTime(kickoff, localTimeZone)
       const polishDateTime = formatDateTime(kickoff, 'Europe/Warsaw')
 
@@ -468,45 +480,174 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max)
 }
 
-function predictMatch(homeTeam: Team, awayTeam: Team, attempt = 0): Prediction {
+function roundTo(value: number, digits: number) {
+  const factor = 10 ** digits
+  return Math.round(value * factor) / factor
+}
+
+function getAttackStrength(team: Team) {
+  const base = 0.82 + (team.rating - 70) / 42
+  const styleOffset = ((teamHash(team) % 7) - 3) * 0.035
+  return clamp(base + styleOffset, 0.65, 1.75)
+}
+
+function getDefenseStrength(team: Team) {
+  const base = 0.84 + (team.rating - 70) / 48
+  const styleOffset = (((teamHash(team) * 3) % 7) - 3) * 0.03
+  return clamp(base + styleOffset, 0.65, 1.7)
+}
+
+function getFormFactor(team: Team, attempt: number) {
+  const variation = attempt * 11
+  const formSeed = ((teamHash(team) + variation) % 9) - 4
+  return formSeed * 0.025
+}
+
+function getHostVenueBoost(team: Team, venueCity: string) {
+  const venueMeta = venueMetaByCity[venueCity]
+
+  if (!venueMeta || team.hostCountry !== venueMeta.countryCode) {
+    return 0
+  }
+
+  let boost = 0.14
+
+  if (team.hostCountry === 'MX') {
+    boost += 0.05
+  }
+
+  if (venueMeta.altitudeMeters >= 1500) {
+    boost += team.hostCountry === 'MX' ? 0.08 : 0.02
+  }
+
+  if (venueCity === 'Mexico City' && team.hostCountry === 'MX') {
+    boost += 0.05
+  }
+
+  return boost
+}
+
+function getAltitudeAdjustment(team: Team, venueCity: string) {
+  const venueMeta = venueMetaByCity[venueCity]
+
+  if (!venueMeta || venueMeta.altitudeMeters < 1200) {
+    return 0
+  }
+
+  if (team.hostCountry === 'MX' && venueMeta.countryCode === 'MX') {
+    return 0.04
+  }
+
+  return -0.05
+}
+
+function poissonProbability(goals: number, lambda: number) {
+  let factorial = 1
+
+  for (let index = 2; index <= goals; index += 1) {
+    factorial *= index
+  }
+
+  return (Math.exp(-lambda) * lambda ** goals) / factorial
+}
+
+function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt = 0): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
-  const variation = attempt * 17
-  const homeNoise = ((teamHash(homeTeam) + teamHash(awayTeam) + variation) % 5) * 0.12
-  const awayNoise = ((teamHash(awayTeam) + teamHash(homeTeam) * 2 + variation) % 5) * 0.1
-  const homeExpectedGoals = clamp(1.1 + ratingGap / 18 + homeNoise, 0.2, 3.7)
-  const awayExpectedGoals = clamp(1.0 - ratingGap / 22 + awayNoise, 0.2, 3.3)
+  const homeAttack = getAttackStrength(homeTeam)
+  const awayAttack = getAttackStrength(awayTeam)
+  const homeDefense = getDefenseStrength(homeTeam)
+  const awayDefense = getDefenseStrength(awayTeam)
+  const formSwing = getFormFactor(homeTeam, attempt) - getFormFactor(awayTeam, attempt)
+  const homeHostBoost = getHostVenueBoost(homeTeam, venueCity)
+  const awayHostBoost = getHostVenueBoost(awayTeam, venueCity)
+  const homeAltitudeAdjustment = getAltitudeAdjustment(homeTeam, venueCity)
+  const awayAltitudeAdjustment = getAltitudeAdjustment(awayTeam, venueCity)
+  const homeExpectedGoals = clamp(
+    1.18 +
+      homeAttack * 0.62 -
+      awayDefense * 0.33 +
+      ratingGap / 90 +
+      formSwing +
+      homeHostBoost -
+      awayHostBoost * 0.4 +
+      homeAltitudeAdjustment,
+    0.2,
+    3.8,
+  )
+  const awayExpectedGoals = clamp(
+    1.02 +
+      awayAttack * 0.58 -
+      homeDefense * 0.31 -
+      ratingGap / 105 -
+      formSwing * 0.7 +
+      awayHostBoost -
+      homeHostBoost * 0.45 +
+      awayAltitudeAdjustment,
+    0.15,
+    3.4,
+  )
 
-  let homeGoals = clamp(Math.round(homeExpectedGoals), 0, 5)
-  let awayGoals = clamp(Math.round(awayExpectedGoals), 0, 5)
+  let homeWinProbability = 0
+  let drawProbability = 0
+  let awayWinProbability = 0
+  let bestScoreProbability = -1
+  let homeGoals = 0
+  let awayGoals = 0
 
-  if (Math.abs(ratingGap) < 5 && Math.abs(homeGoals - awayGoals) > 1) {
-    awayGoals = homeGoals
+  for (let homeGoalCount = 0; homeGoalCount <= 6; homeGoalCount += 1) {
+    const homeProbability = poissonProbability(homeGoalCount, homeExpectedGoals)
+
+    for (let awayGoalCount = 0; awayGoalCount <= 6; awayGoalCount += 1) {
+      const awayProbability = poissonProbability(awayGoalCount, awayExpectedGoals)
+      const scoreProbability = homeProbability * awayProbability
+
+      if (homeGoalCount > awayGoalCount) {
+        homeWinProbability += scoreProbability
+      } else if (homeGoalCount < awayGoalCount) {
+        awayWinProbability += scoreProbability
+      } else {
+        drawProbability += scoreProbability
+      }
+
+      if (scoreProbability > bestScoreProbability) {
+        bestScoreProbability = scoreProbability
+        homeGoals = homeGoalCount
+        awayGoals = awayGoalCount
+      }
+    }
   }
 
-  if (ratingGap > 10 && homeGoals <= awayGoals) {
-    homeGoals = awayGoals + 1
-  }
-
-  if (ratingGap < -10 && awayGoals <= homeGoals) {
-    awayGoals = homeGoals + 1
-  }
-
-  const confidence = clamp(52 + Math.abs(ratingGap) * 1.1 + Math.abs(homeGoals - awayGoals) * 5, 50, 92)
+  const homeWinPercent = roundTo(homeWinProbability * 100, 1)
+  const drawPercent = roundTo(drawProbability * 100, 1)
+  const awayWinPercent = roundTo(awayWinProbability * 100, 1)
+  const confidence = clamp(Math.round(Math.max(homeWinPercent, drawPercent, awayWinPercent)), 40, 92)
   const outcome =
     homeGoals === awayGoals
       ? 'Draw looks plausible'
       : homeGoals > awayGoals
         ? `${homeTeam.name} look stronger`
         : `${awayTeam.name} look stronger`
+  const venueMeta = venueMetaByCity[venueCity]
+  const venueContextSummary =
+    homeHostBoost > 0 || awayHostBoost > 0
+      ? 'Host-country context is included for this venue.'
+      : venueMeta && venueMeta.altitudeMeters >= 1200
+        ? 'This is treated as a neutral match with altitude impact.'
+        : 'This is treated as a neutral-venue match.'
 
   return {
     homeGoals,
     awayGoals,
     confidence,
+    homeWinProbability: homeWinPercent,
+    drawProbability: drawPercent,
+    awayWinProbability: awayWinPercent,
+    homeExpectedGoals: roundTo(homeExpectedGoals, 2),
+    awayExpectedGoals: roundTo(awayExpectedGoals, 2),
     summary:
       attempt > 0
-        ? `${outcome}. This refreshed model run explores a slightly different scenario.`
-        : `${outcome}. This is still a simple strength-based baseline model.`,
+        ? `${outcome}. This refreshed model run uses probabilistic xG plus venue context. ${venueContextSummary}`
+        : `${outcome}. This version uses expected goals, Poisson score distribution and venue context. ${venueContextSummary}`,
   }
 }
 
@@ -664,7 +805,7 @@ function App() {
                 ...match,
                 predictionAttempt: nextAttempt,
                 manualEditorOpen: false,
-                prediction: predictMatch(match.homeTeam, match.awayTeam, nextAttempt),
+                prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt),
               }
             })()
           : match,
@@ -685,7 +826,7 @@ function App() {
           ...match,
           predictionAttempt: nextAttempt,
           manualEditorOpen: false,
-          prediction: predictMatch(match.homeTeam, match.awayTeam, nextAttempt),
+          prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt),
         }
       }),
     )
@@ -785,6 +926,11 @@ function App() {
             homeGoals: Number(match.manualHomeGoals),
             awayGoals: Number(match.manualAwayGoals),
             confidence: 100,
+            homeWinProbability: Number(match.manualHomeGoals) > Number(match.manualAwayGoals) ? 100 : 0,
+            drawProbability: Number(match.manualHomeGoals) === Number(match.manualAwayGoals) ? 100 : 0,
+            awayWinProbability: Number(match.manualAwayGoals) > Number(match.manualHomeGoals) ? 100 : 0,
+            homeExpectedGoals: Number(match.manualHomeGoals),
+            awayExpectedGoals: Number(match.manualAwayGoals),
             summary: 'Manual prediction entered by the user.',
           },
         }
@@ -1001,9 +1147,17 @@ function App() {
 
                       {match.prediction ? (
                         <div className="prediction-box">
+                          <div className="prediction-metrics">
+                            <span className="metric-pill">{match.homeTeam.name} {match.prediction.homeWinProbability}%</span>
+                            <span className="metric-pill">Draw {match.prediction.drawProbability}%</span>
+                            <span className="metric-pill">{match.awayTeam.name} {match.prediction.awayWinProbability}%</span>
+                            <span className="metric-pill">
+                              xG {match.prediction.homeExpectedGoals} - {match.prediction.awayExpectedGoals}
+                            </span>
+                          </div>
                           <p>
-                                <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
-                              </p>
+                            <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
+                          </p>
                             </div>
                           ) : (
                           <div className="prediction-box prediction-box-muted">

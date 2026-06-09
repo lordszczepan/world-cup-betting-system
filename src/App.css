@@ -296,6 +296,25 @@
   border: 1px solid rgba(10, 125, 85, 0.14);
 }
 
+.prediction-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.metric-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 6px 10px;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(10, 125, 85, 0.12);
+  color: var(--text-strong);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
 .prediction-box-muted {
   background: rgba(8, 28, 54, 0.04);
   border-color: rgba(8, 28, 54, 0.08);

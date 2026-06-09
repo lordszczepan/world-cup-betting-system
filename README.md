@@ -21,13 +21,16 @@ npm run dev
 
 ## Current assumptions
 
-- the prediction engine is still a simple strength-rating baseline
+- the prediction engine now uses a lightweight expected-goals and Poisson baseline
+- most matches are treated as neutral-venue matches
+- host advantage is applied only when a host nation plays in its own country
+- high-altitude Mexican venues slightly affect the model
 - knockout routing for third-placed teams uses a provisional assignment layer
 - the UI is ready for a later Poules-style prediction flow with exact-score picks and pool scoring
 
 ## Good next steps
 
-1. replace the baseline model with a data-driven predictor
+1. replace the current baseline inputs with real team form and historical match data
 2. add exact-score entry and points logic inspired by bracket pool products
 3. implement the full official FIFA Annex C third-place routing matrix
 4. store simulations so one user can compare multiple tournament scenarios
