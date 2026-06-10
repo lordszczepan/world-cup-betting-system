@@ -62,6 +62,13 @@
   border: 1px solid rgba(255, 255, 255, 0.12);
 }
 
+.hero-status-copy {
+  margin: 8px 0 0;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: rgba(244, 248, 242, 0.82);
+}
+
 .hero-stats span,
 .match-meta span,
 .match-teams span,
@@ -179,6 +186,42 @@
 
 .standings-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.group-jump-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.group-jump-button,
+.standings-group-link {
+  border: 1px solid rgba(8, 28, 54, 0.12);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-strong);
+  border-radius: 999px;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.group-jump-button:hover,
+.standings-group-link:hover {
+  transform: translateY(-1px);
+  background: white;
+}
+
+.standings-group-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
 }
 
 .match-card {

@@ -692,6 +692,14 @@ function formatDateTime(date: Date, timeZone: string) {
   return { dateLabel, timeLabel }
 }
 
+function getViewerTimeZone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+}
+
+function formatViewerDateTime(date: Date) {
+  return formatDateTime(date, getViewerTimeZone())
+}
+
 function buildHistoryEntry(entry: Omit<PredictionHistoryEntry, 'id' | 'createdAt'>): PredictionHistoryEntry {
   return {
     ...entry,
@@ -1981,12 +1989,14 @@ function App() {
     loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
   )
   const [isRefreshingLiveData, setIsRefreshingLiveData] = useState(false)
+  const [liveRefreshStatus, setLiveRefreshStatus] = useState('Refresh uses public recent-results data to enrich the prediction model.')
   const standings = buildStandings(matches)
   const rankedThirds = rankThirdPlacedTeams(standings)
   const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(knockoutMatches, matches, standings, rankedThirds)
   const displayKnockoutMatches = sanitizeKnockoutMatches(knockoutMatches, preliminaryResolvedKnockoutMatches)
   const resolvedKnockoutMatches = resolveKnockoutMatches(displayKnockoutMatches, matches, standings, rankedThirds)
   const acceptedCount = matches.filter((match) => match.acceptedPrediction).length
+  const viewerTimeZone = getViewerTimeZone()
   const latestLiveRefresh = Object.values(liveTeamForm)
     .map((entry) => (entry?.refreshedAt ? new Date(entry.refreshedAt).getTime() : 0))
     .sort((left, right) => right - left)[0]
@@ -2025,13 +2035,14 @@ function App() {
 
   async function handleRefreshLiveData() {
     setIsRefreshingLiveData(true)
+    setLiveRefreshStatus('Refreshing recent public team results...')
 
     try {
       const uniqueTeams = groupDefinitions.flatMap((groupDefinition) => groupDefinition.teams)
       const liveResults = await Promise.all(
         uniqueTeams.map(async (team) => ({
           teamId: team.id,
-          liveForm: await fetchLiveTeamForm(team),
+          liveForm: await fetchLiveTeamForm(team).catch(() => null),
         })),
       )
 
@@ -2044,11 +2055,27 @@ function App() {
       }, {})
 
       if (Object.keys(nextLiveTeamForm).length > 0) {
-        setLiveTeamForm(nextLiveTeamForm)
+        setLiveTeamForm((currentValue) => ({ ...currentValue, ...nextLiveTeamForm }))
+        setLiveRefreshStatus(
+          `Loaded live form for ${Object.keys(nextLiveTeamForm).length} of ${uniqueTeams.length} teams from TheSportsDB recent results.`,
+        )
+      } else {
+        setLiveRefreshStatus(
+          'No live team form was loaded. TheSportsDB may be unavailable, rate-limited, or some national-team names may not match the public dataset.',
+        )
       }
     } finally {
       setIsRefreshingLiveData(false)
     }
+  }
+
+  function handleScrollToGroup(groupName: string) {
+    setActiveView('group')
+
+    window.requestAnimationFrame(() => {
+      const target = document.getElementById(`group-section-${groupName}`)
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
   }
 
   function handleTryToPredict(matchId: string) {
@@ -2490,7 +2517,16 @@ function App() {
           </article>
           <article>
             <span>Live form refresh</span>
-            <strong>{latestLiveRefresh ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(latestLiveRefresh)) : 'Not loaded yet'}</strong>
+            <strong>
+              {latestLiveRefresh
+                ? new Intl.DateTimeFormat('en-GB', {
+                    dateStyle: 'short',
+                    timeStyle: 'short',
+                    timeZone: viewerTimeZone,
+                  }).format(new Date(latestLiveRefresh))
+                : 'Not loaded yet'}
+            </strong>
+            <p className="hero-status-copy">{liveRefreshStatus}</p>
           </article>
           <div className="hero-button-stack">
             <button type="button" className="secondary-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
@@ -2548,11 +2584,30 @@ function App() {
               </div>
             </div>
 
+            <div className="group-jump-list" aria-label="Jump to group matches">
+              {groupDefinitions.map((groupDefinition) => (
+                <button
+                  key={groupDefinition.name}
+                  type="button"
+                  className="group-jump-button"
+                  onClick={() => handleScrollToGroup(groupDefinition.name)}
+                >
+                  Group {groupDefinition.name}
+                </button>
+              ))}
+            </div>
+
             <div className="standings-grid">
               {groupDefinitions.map((groupDefinition) => (
                 <section key={groupDefinition.name} className="standings-card">
                   <div className="standings-header">
-                    <h3>Group {groupDefinition.name}</h3>
+                    <button
+                      type="button"
+                      className="standings-group-link"
+                      onClick={() => handleScrollToGroup(groupDefinition.name)}
+                    >
+                      Group {groupDefinition.name}
+                    </button>
                   </div>
                   <table>
                     <thead>
@@ -2597,7 +2652,7 @@ function App() {
 
             <div className="group-list">
               {groupDefinitions.map((groupDefinition) => (
-                <section key={groupDefinition.name} className="group-card">
+                <section key={groupDefinition.name} id={`group-section-${groupDefinition.name}`} className="group-card">
                   <div className="group-card-header">
                   <div>
                     <p className="eyebrow">Group {groupDefinition.name}</p>
@@ -2661,9 +2716,9 @@ function App() {
                               </span>
                             </div>
                             <div>
-                              <strong>Poland</strong>
+                              <strong>Your time zone</strong>
                               <span>
-                                {match.polishDateLabel} / {match.polishTimeLabel}
+                                {formatViewerDateTime(new Date(match.kickoffUtc)).dateLabel} / {formatViewerDateTime(new Date(match.kickoffUtc)).timeLabel}
                               </span>
                             </div>
                           </div>
@@ -2864,9 +2919,9 @@ function App() {
                               </span>
                             </div>
                             <div>
-                              <strong>Poland</strong>
+                              <strong>Your time zone</strong>
                               <span>
-                                {resolvedMatch.schedule.polishDateLabel} / {resolvedMatch.schedule.polishTimeLabel}
+                                {formatViewerDateTime(new Date(resolvedMatch.schedule.kickoffUtc)).dateLabel} / {formatViewerDateTime(new Date(resolvedMatch.schedule.kickoffUtc)).timeLabel}
                               </span>
                             </div>
                           </div>
