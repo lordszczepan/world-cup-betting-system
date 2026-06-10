@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import './App.css'
 import { getAnnexCAssignment } from './annexC'
 import { knockoutScheduleByMatchId, type KnockoutScheduleItem } from './knockoutSchedule'
 
 type ViewMode = 'group' | 'bracket'
+type StandingsMode = 'prediction' | 'real'
 type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
 type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
 
@@ -614,6 +615,7 @@ const storageKeys = {
   groupMatches: 'world-cup-betting-system/group-matches',
   knockoutMatches: 'world-cup-betting-system/knockout-matches',
   activeView: 'world-cup-betting-system/active-view',
+  standingsMode: 'world-cup-betting-system/standings-mode',
   liveTeamForm: 'world-cup-betting-system/live-team-form',
 } as const
 
@@ -646,6 +648,22 @@ const defaultRefreshFeedback: RefreshFeedback = {
   kind: 'idle',
   title: 'No refresh is running right now.',
   details: ['Use `Refresh live data & odds` to update team form and backend market odds.'],
+}
+
+function normalizeMarketApiState(state: Partial<MarketApiState>): MarketApiState {
+  return {
+    ...defaultMarketApiState,
+    ...state,
+    availableSources: state.availableSources ?? defaultMarketApiState.availableSources,
+    brokerSlots: {
+      ...defaultMarketApiState.brokerSlots,
+      ...(state.brokerSlots ?? {}),
+    },
+    oddsByMatchId: state.oddsByMatchId ?? {},
+    consensusByMatchId: state.consensusByMatchId ?? {},
+    actualResultsByMatchId: state.actualResultsByMatchId ?? {},
+    trustedSources: state.trustedSources ?? defaultMarketApiState.trustedSources,
+  }
 }
 
 const liveSearchTeamNames: Partial<Record<string, string>> = {
@@ -1181,7 +1199,7 @@ async function fetchMarketStateFromBackend() {
     throw new Error(`Market state request failed with ${response.status}.`)
   }
 
-  return (await response.json()) as MarketApiState
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
 }
 
 async function refreshMarketStateInBackend(matches: MarketTarget[]) {
@@ -1197,7 +1215,24 @@ async function refreshMarketStateInBackend(matches: MarketTarget[]) {
     throw new Error(`Market refresh request failed with ${response.status}.`)
   }
 
-  return (await response.json()) as MarketApiState
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
+}
+
+async function refreshSingleMatchMarketInBackend(match: MarketTarget, mode: 'missing' | 'reload') {
+  const response = await fetch(`/api/market/match/${match.id}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ match, mode }),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null
+    throw new Error(payload?.message ?? `Single-match market refresh failed with ${response.status}.`)
+  }
+
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
 }
 
 async function updateBrokerSlotInBackend(slotKey: BrokerSlotKey, sourceKey: BookmakerSourceKey) {
@@ -1213,7 +1248,7 @@ async function updateBrokerSlotInBackend(slotKey: BrokerSlotKey, sourceKey: Book
     throw new Error(`Broker slot update failed with ${response.status}.`)
   }
 
-  return (await response.json()) as MarketApiState
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
 }
 
 async function submitOddsApiKeyToBackend(apiKey: string) {
@@ -1229,7 +1264,7 @@ async function submitOddsApiKeyToBackend(apiKey: string) {
     throw new Error(`Odds API key submit failed with ${response.status}.`)
   }
 
-  return (await response.json()) as MarketApiState
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
 }
 
 async function refreshOddsApiUsageInBackend() {
@@ -1242,7 +1277,20 @@ async function refreshOddsApiUsageInBackend() {
     throw new Error(payload?.message ?? `Odds API usage refresh failed with ${response.status}.`)
   }
 
-  return (await response.json()) as MarketApiState
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
+}
+
+async function resetMarketStateInBackend() {
+  const response = await fetch('/api/market/reset', {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null
+    throw new Error(payload?.message ?? `Market reset failed with ${response.status}.`)
+  }
+
+  return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
 }
 
 
@@ -1888,9 +1936,14 @@ function getGroupStateContext(match: Match, matches: Match[]): GroupStateContext
   }
 }
 
-function rankThirdPlacedTeams(standings: Record<string, Standing[]>, matches: Match[]) {
+function rankThirdPlacedTeams(
+  standings: Record<string, Standing[]>,
+  matches: Match[],
+  actualResultsByMatchId: Record<string, ActualResultSnapshot>,
+  standingsMode: StandingsMode,
+) {
   const thirdPlacedRows = groupDefinitions
-    .filter((groupDefinition) => isGroupComplete(matches, groupDefinition.name))
+    .filter((groupDefinition) => isGroupCompleteByMode(matches, actualResultsByMatchId, groupDefinition.name, standingsMode))
     .map((groupDefinition) => standings[groupDefinition.name]?.[2])
     .filter((standing): standing is Standing => Boolean(standing))
     .sort((left, right) => {
@@ -1910,8 +1963,32 @@ function getAcceptedGroupMatchCount(matches: Match[], groupName: string) {
   return matches.filter((match) => match.group === groupName && match.acceptedPrediction).length
 }
 
-function isGroupComplete(matches: Match[], groupName: string) {
-  return getAcceptedGroupMatchCount(matches, groupName) === 6
+function getActualGroupMatchCount(matches: Match[], actualResultsByMatchId: Record<string, ActualResultSnapshot>, groupName: string) {
+  return matches.filter((match) => match.group === groupName && actualResultsByMatchId[match.id]).length
+}
+
+function getGroupMatchCountByMode(
+  matches: Match[],
+  actualResultsByMatchId: Record<string, ActualResultSnapshot>,
+  groupName: string,
+  standingsMode: StandingsMode,
+) {
+  return standingsMode === 'real'
+    ? getActualGroupMatchCount(matches, actualResultsByMatchId, groupName)
+    : getAcceptedGroupMatchCount(matches, groupName)
+}
+
+function isGroupCompleteByMode(
+  matches: Match[],
+  actualResultsByMatchId: Record<string, ActualResultSnapshot>,
+  groupName: string,
+  standingsMode: StandingsMode,
+) {
+  return getGroupMatchCountByMode(matches, actualResultsByMatchId, groupName, standingsMode) === 6
+}
+
+function getStandingsModeLabel(standingsMode: StandingsMode) {
+  return standingsMode === 'real' ? 'real results' : 'accepted predictions'
 }
 
 function describeSlot(slot: string) {
@@ -2089,6 +2166,8 @@ function resolveKnockoutMatches(
   groupMatches: Match[],
   standings: Record<string, Standing[]>,
   rankedThirds: RankedThird[],
+  actualResultsByMatchId: Record<string, ActualResultSnapshot>,
+  standingsMode: StandingsMode,
 ) {
   const roundOf32 = buildRoundOf32(standings, rankedThirds)
   const roundOf32ById = new Map(roundOf32.map((match) => [match.id, match]))
@@ -2105,12 +2184,16 @@ function resolveKnockoutMatches(
     if (/^[123][A-L]$/.test(slot)) {
       const place = Number(slot[0]) - 1
       const groupName = slot[1]
-      const acceptedGroupMatches = getAcceptedGroupMatchCount(groupMatches, groupName)
+      const completedGroupMatches = getGroupMatchCountByMode(groupMatches, actualResultsByMatchId, groupName, standingsMode)
 
-      if (acceptedGroupMatches < 6) {
+      if (completedGroupMatches < 6) {
         return {
           team: null,
-          reasons: [`${describeSlot(slot)} is not final yet. Accept all Group ${groupName} matches first (${acceptedGroupMatches}/6 accepted).`],
+          reasons: [
+            standingsMode === 'real'
+              ? `${describeSlot(slot)} is not final yet. Wait for all real Group ${groupName} results first (${completedGroupMatches}/6 loaded).`
+              : `${describeSlot(slot)} is not final yet. Accept all Group ${groupName} matches first (${completedGroupMatches}/6 accepted).`,
+          ],
         }
       }
 
@@ -2155,11 +2238,15 @@ function resolveKnockoutMatches(
     }
 
     if (/^3[A-L](\/[A-L])+$/.test(slot)) {
-      const completedGroups = groupDefinitions.filter((groupDefinition) => isGroupComplete(groupMatches, groupDefinition.name)).length
+      const completedGroups = groupDefinitions.filter((groupDefinition) =>
+        isGroupCompleteByMode(groupMatches, actualResultsByMatchId, groupDefinition.name, standingsMode),
+      ).length
 
       return {
         team: null,
-        reasons: [`${describeSlot(slot)} needs the final best-third-place ranking. Complete more group tables first (${completedGroups}/12 groups complete).`],
+        reasons: [
+          `${describeSlot(slot)} needs the final best-third-place ranking from ${getStandingsModeLabel(standingsMode)}. Complete more group tables first (${completedGroups}/12 groups complete).`,
+        ],
       }
     }
 
@@ -2426,6 +2513,7 @@ function App() {
     mergeStoredKnockoutMatches(loadStoredState<KnockoutMatch[]>(storageKeys.knockoutMatches)),
   )
   const [activeView, setActiveView] = useState<ViewMode>(() => loadStoredState<ViewMode>(storageKeys.activeView) ?? 'group')
+  const [standingsMode, setStandingsMode] = useState<StandingsMode>(() => loadStoredState<StandingsMode>(storageKeys.standingsMode) ?? 'prediction')
   const [liveTeamForm, setLiveTeamForm] = useState<Partial<Record<string, TeamLiveForm>>>(() =>
     loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
   )
@@ -2438,12 +2526,29 @@ function App() {
   const [oddsApiKeyInput, setOddsApiKeyInput] = useState('')
   const [oddsApiKeyStatus, setOddsApiKeyStatus] = useState('The key stays local in the running backend session.')
   const [isRefreshingOddsUsage, setIsRefreshingOddsUsage] = useState(false)
+  const [marketActionState, setMarketActionState] = useState<{ matchId: string; mode: 'missing' | 'reload' } | null>(null)
+  const didRunInitialRefresh = useRef(false)
   const standings = buildStandings(matches)
   const actualStandings = buildActualStandings(matches, marketApiState.actualResultsByMatchId)
-  const rankedThirds = rankThirdPlacedTeams(standings, matches)
-  const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(knockoutMatches, matches, standings, rankedThirds)
+  const activeStandings = standingsMode === 'real' ? actualStandings : standings
+  const rankedThirds = rankThirdPlacedTeams(activeStandings, matches, marketApiState.actualResultsByMatchId, standingsMode)
+  const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(
+    knockoutMatches,
+    matches,
+    activeStandings,
+    rankedThirds,
+    marketApiState.actualResultsByMatchId,
+    standingsMode,
+  )
   const displayKnockoutMatches = sanitizeKnockoutMatches(knockoutMatches, preliminaryResolvedKnockoutMatches)
-  const resolvedKnockoutMatches = resolveKnockoutMatches(displayKnockoutMatches, matches, standings, rankedThirds)
+  const resolvedKnockoutMatches = resolveKnockoutMatches(
+    displayKnockoutMatches,
+    matches,
+    activeStandings,
+    rankedThirds,
+    marketApiState.actualResultsByMatchId,
+    standingsMode,
+  )
   const acceptedCount = matches.filter((match) => match.acceptedPrediction).length
   const viewerTimeZone = getViewerTimeZone()
   const latestLiveRefresh = Object.values(liveTeamForm)
@@ -2475,6 +2580,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(storageKeys.activeView, JSON.stringify(activeView))
   }, [activeView])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.standingsMode, JSON.stringify(standingsMode))
+  }, [standingsMode])
 
   useEffect(() => {
     window.localStorage.setItem(storageKeys.liveTeamForm, JSON.stringify(liveTeamForm))
@@ -2575,10 +2684,16 @@ function App() {
   }, [matches, resolvedKnockoutMatches])
 
   useEffect(() => {
-    if (latestLiveRefresh && Date.now() - latestLiveRefresh < 1000 * 60 * 60 * 6) {
+    if (didRunInitialRefresh.current) {
       return
     }
 
+    if (latestLiveRefresh && Date.now() - latestLiveRefresh < 1000 * 60 * 60 * 6) {
+      didRunInitialRefresh.current = true
+      return
+    }
+
+    didRunInitialRefresh.current = true
     queueMicrotask(() => {
       void handleRefreshLiveData()
     })
@@ -2659,6 +2774,66 @@ function App() {
     }
 
     setIsRefreshingOddsUsage(false)
+  }
+
+  function getMarketTargetByMatchId(matchId: string): MarketTarget | null {
+    const groupMatch = matches.find((match) => match.id === matchId)
+
+    if (groupMatch) {
+      return {
+        id: groupMatch.id,
+        kickoffUtc: groupMatch.kickoffUtc,
+        homeTeam: groupMatch.homeTeam,
+        awayTeam: groupMatch.awayTeam,
+      }
+    }
+
+    const knockoutMatch = resolvedKnockoutMatches.find((item) => item.match.id === matchId && item.homeTeam && item.awayTeam && item.schedule)
+
+    if (!knockoutMatch?.homeTeam || !knockoutMatch.awayTeam || !knockoutMatch.schedule) {
+      return null
+    }
+
+    return {
+      id: knockoutMatch.match.id,
+      kickoffUtc: knockoutMatch.schedule.kickoffUtc,
+      homeTeam: knockoutMatch.homeTeam,
+      awayTeam: knockoutMatch.awayTeam,
+    }
+  }
+
+  async function handleRefreshSingleMatchMarket(matchId: string, mode: 'missing' | 'reload') {
+    const target = getMarketTargetByMatchId(matchId)
+
+    if (!target) {
+      return
+    }
+
+    setMarketActionState({ matchId, mode })
+    setBackendConnectionStatus('checking')
+
+    const nextState = await refreshSingleMatchMarketInBackend(target, mode).catch((error) => {
+      const message = getErrorMessage(error)
+      setBackendConnectionStatus(message.includes('Odds API key is missing') ? 'online' : 'offline')
+      setRefreshFeedback({
+        kind: 'error',
+        title: 'Single-match market refresh failed.',
+        details: [message],
+      })
+      return null
+    })
+
+    if (nextState) {
+      setMarketApiState(nextState)
+      setBackendConnectionStatus('online')
+      setRefreshFeedback({
+        kind: 'success',
+        title: mode === 'reload' ? 'Single-match bookmaker odds reloaded.' : 'Missing bookmaker odds loaded.',
+        details: [nextState.marketStatus, nextState.stsStatus],
+      })
+    }
+
+    setMarketActionState(null)
   }
 
   function handleTryToPredict(matchId: string) {
@@ -2766,6 +2941,7 @@ function App() {
   function handleReset() {
     setMatches(createInitialMatches())
     setKnockoutMatches(createInitialKnockoutMatches())
+    setStandingsMode('prediction')
   }
 
   function handleResetMatch(matchId: string) {
@@ -3081,22 +3257,44 @@ function App() {
     )
   }
 
-  function handleClearSavedData() {
+  async function handleClearSavedData() {
     window.localStorage.removeItem(storageKeys.groupMatches)
     window.localStorage.removeItem(storageKeys.knockoutMatches)
     window.localStorage.removeItem(storageKeys.activeView)
+    window.localStorage.removeItem(storageKeys.standingsMode)
     window.localStorage.removeItem(storageKeys.liveTeamForm)
     setMatches(createInitialMatches())
     setKnockoutMatches(createInitialKnockoutMatches())
     setActiveView('group')
+    setStandingsMode('prediction')
     setLiveTeamForm({})
-    setMarketApiState(defaultMarketApiState)
+    setBackendConnectionStatus('checking')
+
+    const nextState = await resetMarketStateInBackend().catch(() => null)
+
+    if (nextState) {
+      setMarketApiState(nextState)
+      setBackendConnectionStatus('online')
+    } else {
+      setMarketApiState(defaultMarketApiState)
+      setBackendConnectionStatus('offline')
+    }
   }
 
   function renderBookmakerStrip(matchId: string) {
     const oddsBySource = marketApiState.oddsByMatchId[matchId] ?? {}
     const brokerSlots = marketApiState.brokerSlots
     const consensus = marketApiState.consensusByMatchId[matchId]
+    const hasDisplayedOdds = (Object.values(brokerSlots) as BookmakerSourceKey[]).some((sourceKey) => Boolean(oddsBySource[sourceKey]))
+    const actionMode = hasDisplayedOdds ? 'reload' : 'missing'
+    const actionBusy = marketActionState?.matchId === matchId
+    const actionLabel = actionBusy
+      ? actionMode === 'reload'
+        ? 'Reloading...'
+        : 'Loading...'
+      : actionMode === 'reload'
+        ? 'Reload'
+        : 'Load Missing'
 
     return (
       <div className="bookmaker-box">
@@ -3108,6 +3306,14 @@ function App() {
               {consensus ? `${consensus.sourceLabel} (${consensus.homeProbability}% / ${consensus.drawProbability}% / ${consensus.awayProbability}%)` : 'not loaded yet'}
             </span>
           </div>
+          <button
+            type="button"
+            className="secondary-button compact-button"
+            onClick={() => void handleRefreshSingleMatchMarket(matchId, actionMode)}
+            disabled={actionBusy}
+          >
+            {actionLabel}
+          </button>
         </div>
         <div className="bookmaker-grid">
           {(Object.entries(brokerSlots) as Array<[BrokerSlotKey, BookmakerSourceKey]>).map(([slotKey, sourceKey], index) => {
@@ -3307,6 +3513,17 @@ function App() {
                 Submit
               </button>
             </form>
+            <p className="api-key-help">
+              Need a key?{' '}
+              <a
+                href="https://the-odds-api.com/"
+                target="_blank"
+                rel="noreferrer"
+                className="api-key-link"
+              >
+                Open The Odds API
+              </a>
+            </p>
             <p className="hero-status-copy">{oddsApiKeyStatus}</p>
             <div className="refresh-feedback-box">
               <strong>{refreshFeedback.title}</strong>
@@ -3318,13 +3535,13 @@ function App() {
             </div>
           </article>
           <div className="hero-button-stack">
-            <button type="button" className="secondary-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
+            <button type="button" className="secondary-button hero-action-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
               {isRefreshingLiveData ? 'Refreshing live data & odds...' : 'Refresh live data & odds'}
             </button>
-            <button type="button" className="secondary-button" onClick={handleReset}>
+            <button type="button" className="secondary-button hero-action-button" onClick={handleReset}>
               Reset simulation
             </button>
-            <button type="button" className="secondary-button" onClick={handleClearSavedData}>
+            <button type="button" className="secondary-button hero-action-button" onClick={() => void handleClearSavedData()}>
               Clear saved data
             </button>
           </div>
@@ -3370,6 +3587,23 @@ function App() {
               <div>
                 <p className="eyebrow">Standings</p>
                 <h2>Group tables A-L</h2>
+                <p>Bracket seeding currently uses {getStandingsModeLabel(standingsMode)}.</p>
+              </div>
+              <div className="standings-mode-switcher" aria-label="Choose table source for bracket seeding">
+                <button
+                  type="button"
+                  className={`tab-button ${standingsMode === 'prediction' ? 'tab-button-active' : ''}`}
+                  onClick={() => setStandingsMode('prediction')}
+                >
+                  Prediction table
+                </button>
+                <button
+                  type="button"
+                  className={`tab-button ${standingsMode === 'real' ? 'tab-button-active' : ''}`}
+                  onClick={() => setStandingsMode('real')}
+                >
+                  Real table
+                </button>
               </div>
             </div>
 
@@ -3412,8 +3646,9 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(standings[groupDefinition.name] ?? []).map((row, index) => {
+                      {(activeStandings[groupDefinition.name] ?? []).map((row, index) => {
                         const actualRow = actualStandings[groupDefinition.name]?.find((standing) => standing.team.id === row.team.id)
+                        const predictionRow = standings[groupDefinition.name]?.find((standing) => standing.team.id === row.team.id)
 
                         return (
                           <tr key={row.team.id}>
@@ -3424,9 +3659,9 @@ function App() {
                                 <span>{row.team.name}</span>
                               </span>
                             </td>
-                            <td>{row.points}</td>
-                            <td>{row.goalDifference}</td>
-                            <td>{row.played}</td>
+                            <td>{predictionRow?.points ?? 0}</td>
+                            <td>{predictionRow?.goalDifference ?? 0}</td>
+                            <td>{predictionRow?.played ?? 0}</td>
                             <td>{actualRow?.played ? actualRow.points : ''}</td>
                             <td>{actualRow?.played ? actualRow.goalDifference : ''}</td>
                             <td>{actualRow?.played ? actualRow.played : ''}</td>
@@ -3595,14 +3830,23 @@ function App() {
                               />
                             </label>
                           </div>
-                          <button
-                            type="button"
-                            className="secondary-button"
-                            onClick={() => handleSaveManualPrediction(match.id)}
-                            disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
-                          >
-                            Save manual prediction
-                          </button>
+                          <div className="manual-entry-actions">
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => handleSaveManualPrediction(match.id)}
+                              disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
+                            >
+                              Save manual prediction
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => handleToggleManualEditor(match.id)}
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         </div>
                       ) : null}
 
@@ -3654,6 +3898,23 @@ function App() {
               <div>
                 <p className="eyebrow">Wild cards</p>
                 <h2>Best third-placed teams</h2>
+                <p>Round of 32 seeding uses {getStandingsModeLabel(standingsMode)}.</p>
+              </div>
+              <div className="standings-mode-switcher" aria-label="Choose table source for bracket seeding">
+                <button
+                  type="button"
+                  className={`tab-button ${standingsMode === 'prediction' ? 'tab-button-active' : ''}`}
+                  onClick={() => setStandingsMode('prediction')}
+                >
+                  Prediction table
+                </button>
+                <button
+                  type="button"
+                  className={`tab-button ${standingsMode === 'real' ? 'tab-button-active' : ''}`}
+                  onClick={() => setStandingsMode('real')}
+                >
+                  Real table
+                </button>
               </div>
             </div>
 
@@ -3820,14 +4081,23 @@ function App() {
                                 />
                               </label>
                             </div>
-                            <button
-                              type="button"
-                              className="secondary-button"
-                              onClick={() => handleSaveKnockoutManualPrediction(match.id)}
-                              disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
-                            >
-                              Save manual prediction
-                            </button>
+                            <div className="manual-entry-actions">
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => handleSaveKnockoutManualPrediction(match.id)}
+                                disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
+                              >
+                                Save manual prediction
+                              </button>
+                              <button
+                                type="button"
+                                className="secondary-button"
+                                onClick={() => handleToggleKnockoutManualEditor(match.id)}
+                              >
+                                Cancel
+                              </button>
+                            </div>
                           </div>
                         ) : null}
 

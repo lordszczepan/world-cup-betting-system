@@ -185,6 +185,41 @@ function buildConsensusByMatchId(oddsByMatchId, trustedSources) {
   )
 }
 
+function hasAnyOddsForMatch(state, matchId) {
+  return Object.values(state.oddsByMatchId?.[matchId] ?? {}).some(Boolean)
+}
+
+function isMatchCompleted(state, matchId) {
+  return Boolean(state.actualResultsByMatchId?.[matchId])
+}
+
+function getRefreshableMatches(matches, state) {
+  return matches.filter((match) => !hasAnyOddsForMatch(state, match.id) && !isMatchCompleted(state, match.id))
+}
+
+function mergeOddsByMatchId(currentOddsByMatchId, nextOddsByMatchId, mode = 'missing') {
+  const mergedOddsByMatchId = { ...currentOddsByMatchId }
+
+  for (const [matchId, incomingBySource] of Object.entries(nextOddsByMatchId)) {
+    const currentBySource = mergedOddsByMatchId[matchId] ?? {}
+    const nextBySource =
+      mode === 'reload'
+        ? { ...currentBySource, ...incomingBySource }
+        : {
+            ...currentBySource,
+            ...Object.fromEntries(
+              Object.entries(incomingBySource).filter(([sourceKey]) => !currentBySource[sourceKey]),
+            ),
+          }
+
+    if (Object.keys(nextBySource).length > 0) {
+      mergedOddsByMatchId[matchId] = nextBySource
+    }
+  }
+
+  return mergedOddsByMatchId
+}
+
 async function ensureStateFile() {
   await fs.mkdir(path.dirname(stateFilePath), { recursive: true })
 
@@ -436,9 +471,21 @@ app.get('/api/market/state', async (_request, response) => {
 app.post('/api/market/refresh', async (request, response) => {
   try {
     const matches = Array.isArray(request.body?.matches) ? request.body.matches : []
+    const refreshableMatches = getRefreshableMatches(matches, state)
     const [oddsApiResult, stsResult, actualScoresResult] = await Promise.all([
-      fetchOddsApiBookmakerMarkets(matches),
-      fetchStsBookmakerMarkets(matches),
+      refreshableMatches.length > 0
+        ? fetchOddsApiBookmakerMarkets(refreshableMatches)
+        : Promise.resolve({
+            nextOddsByMatchId: {},
+            status: 'Preserved currently loaded bookmaker odds. No missing live markets needed a global refresh.',
+            usage: undefined,
+          }),
+      refreshableMatches.length > 0
+        ? fetchStsBookmakerMarkets(refreshableMatches)
+        : Promise.resolve({
+            nextOddsByMatchId: {},
+            status: 'Preserved current STS odds. No missing mapped markets needed a global refresh.',
+          }),
       fetchOddsApiCompletedScores(matches).catch((error) => ({
         actualResultsByMatchId: {},
         status: error instanceof Error ? `Real results refresh failed: ${error.message}` : 'Real results refresh failed.',
@@ -446,16 +493,12 @@ app.post('/api/market/refresh', async (request, response) => {
       })),
     ])
 
-    const nextOddsByMatchId = { ...state.oddsByMatchId }
+    const nextOddsByMatchId = mergeOddsByMatchId(
+      mergeOddsByMatchId(state.oddsByMatchId, oddsApiResult.nextOddsByMatchId, 'missing'),
+      stsResult.nextOddsByMatchId,
+      'missing',
+    )
     const nextActualResultsByMatchId = { ...state.actualResultsByMatchId, ...actualScoresResult.actualResultsByMatchId }
-
-    for (const [matchId, value] of Object.entries(oddsApiResult.nextOddsByMatchId)) {
-      nextOddsByMatchId[matchId] = { ...(nextOddsByMatchId[matchId] ?? {}), ...value }
-    }
-
-    for (const [matchId, value] of Object.entries(stsResult.nextOddsByMatchId)) {
-      nextOddsByMatchId[matchId] = { ...(nextOddsByMatchId[matchId] ?? {}), ...value }
-    }
 
     state = {
       ...state,
@@ -476,6 +519,68 @@ app.post('/api/market/refresh', async (request, response) => {
   } catch (error) {
     response.status(500).json({
       message: error instanceof Error ? error.message : 'Unknown market refresh error.',
+    })
+  }
+})
+
+app.post('/api/market/match/:matchId', async (request, response) => {
+  try {
+    const matchId = request.params.matchId
+    const match = request.body?.match
+    const mode = request.body?.mode === 'reload' ? 'reload' : 'missing'
+
+    if (!match?.id || match.id !== matchId || !match.homeTeam || !match.awayTeam || !match.kickoffUtc) {
+      response.status(400).json({ message: 'A valid match payload is required.' })
+      return
+    }
+
+    state = await readState()
+
+    if (isMatchCompleted(state, matchId)) {
+      response.json({
+        ...state,
+        marketStatus: `Match ${matchId} already has a completed real result, so bookmaker odds were left unchanged.`,
+      })
+      return
+    }
+
+    const [oddsApiResult, stsResult] = await Promise.all([
+      fetchOddsApiBookmakerMarkets([match]).catch((error) => ({
+        nextOddsByMatchId: {},
+        status: error instanceof Error ? error.message : 'Single-match odds refresh failed.',
+        usage: undefined,
+      })),
+      fetchStsBookmakerMarkets([match]).catch(() => ({
+        nextOddsByMatchId: {},
+        status: 'STS single-match refresh failed.',
+      })),
+    ])
+
+    const nextOddsByMatchId = mergeOddsByMatchId(
+      mergeOddsByMatchId(state.oddsByMatchId, oddsApiResult.nextOddsByMatchId, mode),
+      stsResult.nextOddsByMatchId,
+      mode,
+    )
+
+    state = {
+      ...state,
+      oddsByMatchId: nextOddsByMatchId,
+      consensusByMatchId: buildConsensusByMatchId(nextOddsByMatchId, state.trustedSources),
+      marketStatus:
+        mode === 'reload'
+          ? `Reloaded bookmaker odds for Match ${matchId} when fresh data was available. Existing values were preserved for any sources that still returned no data.`
+          : `Loaded missing bookmaker odds for Match ${matchId}. Existing displayed values were preserved.`,
+      stsStatus: stsResult.status,
+      latestRefreshAt: new Date().toISOString(),
+      apiKeyConfigured: Boolean(runtimeOddsApiKey),
+      oddsApiUsage: oddsApiResult.usage ?? state.oddsApiUsage,
+    }
+
+    await writeState(state)
+    response.json(state)
+  } catch (error) {
+    response.status(500).json({
+      message: error instanceof Error ? error.message : 'Unknown single-match market refresh error.',
     })
   }
 })
@@ -548,6 +653,20 @@ app.post('/api/market/slots/:slotKey', async (request, response) => {
       ...state.brokerSlots,
       [slotKey]: sourceKey,
     },
+  }
+
+  await writeState(state)
+  response.json(state)
+})
+
+app.post('/api/market/reset', async (_request, response) => {
+  state = {
+    ...defaultState,
+    availableSources: bookmakerSources,
+    apiKeyConfigured: Boolean(runtimeOddsApiKey),
+    marketStatus: runtimeOddsApiKey
+      ? 'Market odds were cleared from local backend storage. Run refresh when you want to download them again.'
+      : defaultState.marketStatus,
   }
 
   await writeState(state)

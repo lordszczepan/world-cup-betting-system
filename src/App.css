@@ -218,6 +218,23 @@
   color: rgba(244, 248, 242, 0.5);
 }
 
+.api-key-help {
+  margin: 10px 0 0;
+  color: rgba(244, 248, 242, 0.78);
+  font-size: 0.84rem;
+}
+
+.api-key-link {
+  color: #ffffff;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.api-key-link:hover {
+  color: #d9fff3;
+}
+
 .hero-status-copy {
   margin: 8px 0 0;
   font-size: 0.86rem;
@@ -293,6 +310,13 @@
   display: flex;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.standings-mode-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
 }
 
 .tab-button {
@@ -915,6 +939,12 @@
   color: var(--text-strong);
 }
 
+.manual-entry-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .action-row {
   display: flex;
   gap: 12px;
@@ -949,6 +979,16 @@
 .secondary-button {
   background: rgba(8, 28, 54, 0.08);
   color: var(--text-strong);
+}
+
+.hero-action-button {
+  background: rgba(114, 198, 179, 0.28);
+  color: #ffffff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.hero-action-button:hover {
+  background: rgba(132, 214, 196, 0.38);
 }
 
 .secondary-button:disabled {
