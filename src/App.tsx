@@ -3,11 +3,21 @@ import './App.css'
 import { getAnnexCAssignment } from './annexC'
 import { knockoutScheduleByMatchId, type KnockoutScheduleItem } from './knockoutSchedule'
 
-type ViewMode = 'group' | 'bracket' | 'teams'
+type ViewMode = 'group' | 'bracket' | 'teams' | 'simulation'
 type StandingsMode = 'prediction' | 'real'
 type TeamSortMode = 'alphabetical' | 'ranking' | 'group'
 type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
 type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
+type PhaseAwardKey = 'goalMachine' | 'disastrousDefence' | 'cardKings' | 'nobleEleven'
+
+type SimulationFocus = {
+  stage: 'group' | 'knockout'
+  matchId: string
+  label: string
+  homeTeamName: string
+  awayTeamName: string
+  venue: string
+}
 
 type TeamModelProfile = {
   chanceCreation: number
@@ -791,6 +801,13 @@ const defaultRefreshFeedback: RefreshFeedback = {
   title: 'No refresh is running right now.',
   details: ['Use `Refresh Live Data` for team data and `Refresh Bets` for bookmaker odds and results.'],
 }
+
+const phaseAwardDefinitions: { key: PhaseAwardKey; title: string; description: string }[] = [
+  { key: 'goalMachine', title: 'Goal Machine', description: 'Most goals scored in this phase.' },
+  { key: 'disastrousDefence', title: 'Disastrous Defence', description: 'Most goals conceded in this phase.' },
+  { key: 'cardKings', title: 'Card Kings', description: 'Most cards collected in this phase.' },
+  { key: 'nobleEleven', title: 'Noble Eleven', description: 'Fewest cards collected in this phase.' },
+]
 
 const defaultLiveDataState: LiveDataState = {
   liveTeamFormById: {},
@@ -2984,6 +3001,40 @@ function renderPredictionHistory(history: PredictionHistoryEntry[] | undefined) 
   )
 }
 
+function renderPhaseAwardsSkeleton(phaseTitle: string, phaseNote: string) {
+  return (
+    <section className="phase-awards-box">
+      <div className="phase-awards-header">
+        <div>
+          <p className="eyebrow">Poules-style extras</p>
+          <h3>{phaseTitle}</h3>
+          <p>{phaseNote}</p>
+        </div>
+      </div>
+      <div className="phase-awards-grid">
+        {phaseAwardDefinitions.map((award) => (
+          <article key={award.key} className="phase-award-card">
+            <strong>{award.title}</strong>
+            <p>{award.description}</p>
+            <div className="phase-award-columns">
+              <div className="phase-award-column">
+                <span>From accepted match picks</span>
+                <strong>Skeleton only</strong>
+                <small>This slot will later derive a winner from your accepted results for this phase.</small>
+              </div>
+              <div className="phase-award-column">
+                <span>Dedicated award engine</span>
+                <strong>Planned</strong>
+                <small>This slot is reserved for an independent award-prediction model.</small>
+              </div>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function formatNullableStat(value?: string | number | null) {
   if (value === undefined || value === null || value === '') {
     return 'No data yet'
@@ -3043,6 +3094,7 @@ function App() {
   const [activeTeamId, setActiveTeamId] = useState<string>(
     () => loadStoredState<string>('world-cup-betting-system/active-team-id') ?? (groupDefinitions[0]?.teams[0]?.id ?? ''),
   )
+  const [simulationFocus, setSimulationFocus] = useState<SimulationFocus | null>(null)
   const [liveTeamForm, setLiveTeamForm] = useState<Partial<Record<string, TeamLiveForm>>>(() =>
     loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
   )
@@ -3087,6 +3139,7 @@ function App() {
     standingsMode,
   )
   const acceptedCount = matches.filter((match) => match.acceptedPrediction).length
+  const acceptedKnockoutCount = displayKnockoutMatches.filter((match) => match.acceptedPrediction).length
   const viewerTimeZone = getViewerTimeZone()
   const latestLiveRefresh = Object.values(liveTeamForm)
     .map((entry) => (entry?.refreshedAt ? new Date(entry.refreshedAt).getTime() : 0))
@@ -3292,6 +3345,30 @@ function App() {
     } finally {
       setRefreshingTeamId(null)
     }
+  }
+
+  function handleOpenSimulationFromGroupMatch(match: Match) {
+    setSimulationFocus({
+      stage: 'group',
+      matchId: match.id,
+      label: `Group ${match.group} / ${match.id}`,
+      homeTeamName: match.homeTeam.name,
+      awayTeamName: match.awayTeam.name,
+      venue: match.venueCity,
+    })
+    setActiveView('simulation')
+  }
+
+  function handleOpenSimulationFromKnockoutMatch(match: KnockoutMatch, resolvedMatch: ResolvedKnockoutMatch) {
+    setSimulationFocus({
+      stage: 'knockout',
+      matchId: match.id,
+      label: `${match.stage} / ${match.id}`,
+      homeTeamName: resolvedMatch.homeTeam?.name ?? 'Waiting for qualifier',
+      awayTeamName: resolvedMatch.awayTeam?.name ?? 'Waiting for qualifier',
+      venue: resolvedMatch.schedule?.venueCity ?? 'TBC',
+    })
+    setActiveView('simulation')
   }
 
   async function handleRefreshBets() {
@@ -4185,6 +4262,10 @@ function App() {
             <strong>{acceptedCount}/72</strong>
           </article>
           <article>
+            <span>Accepted knockout picks</span>
+            <strong>{acceptedKnockoutCount}/32</strong>
+          </article>
+          <article>
             <span>Qualified to knockouts</span>
             <strong>{24 + Math.min(rankedThirds.filter((row) => row.played > 0 || row.points > 0).length, 8)}/32</strong>
           </article>
@@ -4425,6 +4506,13 @@ function App() {
         >
           Teams
         </button>
+        <button
+          type="button"
+          className={`tab-button ${activeView === 'simulation' ? 'tab-button-active' : ''}`}
+          onClick={() => setActiveView('simulation')}
+        >
+          Detailed Simulation
+        </button>
       </section>
 
       {activeView === 'group' ? (
@@ -4530,6 +4618,11 @@ function App() {
               </div>
               <span className="badge">paired by round</span>
             </div>
+
+            {renderPhaseAwardsSkeleton(
+              'Group Phase side awards',
+              'This is a lightweight placeholder for Poules-style side bets in the group stage. The two award columns are intentionally reserved for future logic.',
+            )}
 
             <div className="group-list">
               {groupDefinitions.map((groupDefinition) => (
@@ -4695,15 +4788,22 @@ function App() {
                             </div>
                           ) : null}
 
-                          <div className="action-row">
-                            <button type="button" className="primary-button" onClick={() => handleTryToPredict(match.id)}>
-                              {match.prediction ? 'Predict again' : 'Try to predict'}
-                            </button>
-                            <button
-                              type="button"
-                              className="secondary-button"
-                              onClick={() => handleToggleManualEditor(match.id)}
-                            >
+                        <div className="action-row">
+                          <button type="button" className="primary-button" onClick={() => handleTryToPredict(match.id)}>
+                            {match.prediction ? 'Predict again' : 'Try to predict'}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleOpenSimulationFromGroupMatch(match)}
+                          >
+                            Detailed simulation
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleToggleManualEditor(match.id)}
+                          >
                               {match.manualEditorOpen ? 'Close manual entry' : 'Manual prediction'}
                             </button>
                             <button
@@ -4801,6 +4901,11 @@ function App() {
                   </span>
                 </div>
               </div>
+
+              {renderPhaseAwardsSkeleton(
+                `${title} side awards`,
+                'Skeleton placeholder for phase-level side bets. Later this area can compare a table derived from your accepted picks with an independent award-prediction engine.',
+              )}
 
               <div className="knockout-stage-grid">
                 {stageMatches.map((match) => {
@@ -4960,6 +5065,13 @@ function App() {
                           <button
                             type="button"
                             className="secondary-button"
+                            onClick={() => handleOpenSimulationFromKnockoutMatch(match, resolvedMatch)}
+                          >
+                            Detailed simulation
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
                             onClick={() => handleToggleKnockoutManualEditor(match.id)}
                             disabled={!canPredict}
                           >
@@ -4995,6 +5107,66 @@ function App() {
             )
           })}
         </>
+      ) : activeView === 'simulation' ? (
+        <section className="panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Detailed simulation</p>
+              <h2>Monte Carlo workbench</h2>
+              <p>
+                This is a planned workspace for much deeper match simulation, bigger probability trees, distribution charts
+                and import-back controls for Group Phase and Bracket Phase.
+              </p>
+            </div>
+            <span className="badge">Skeleton only</span>
+          </div>
+
+          <div className="simulation-layout">
+            <article className="simulation-focus-card">
+              <span className="eyebrow">Selected match</span>
+              {simulationFocus ? (
+                <>
+                  <h3>{simulationFocus.homeTeamName} vs {simulationFocus.awayTeamName}</h3>
+                  <p>{simulationFocus.label}</p>
+                  <p>Venue: {simulationFocus.venue}</p>
+                </>
+              ) : (
+                <>
+                  <h3>No match selected yet</h3>
+                  <p>Open any group or knockout match and click <strong>Detailed simulation</strong> to prepare this workspace.</p>
+                </>
+              )}
+            </article>
+
+            <article className="simulation-focus-card">
+              <span className="eyebrow">Planned run mode</span>
+              <h3>High-volume stochastic model</h3>
+              <p>
+                Reserved for future `10,000+` simulation runs, score distributions, extra-time branches, penalty paths,
+                bookmaker overlays and import-back actions.
+              </p>
+            </article>
+          </div>
+
+          <div className="simulation-grid">
+            <article className="simulation-card">
+              <h3>Outcome distributions</h3>
+              <p>Planned charts: scoreline heatmap, win/draw/win density, extra-time probability and penalties probability.</p>
+            </article>
+            <article className="simulation-card">
+              <h3>Driver analysis</h3>
+              <p>Planned charts: factor importance, roster-impact sensitivity, travel/rest scenarios and market-vs-model divergence.</p>
+            </article>
+            <article className="simulation-card">
+              <h3>Import workflow</h3>
+              <p>Planned action: accept a simulation result and send it back as the new answer in Group Phase or Bracket Phase.</p>
+            </article>
+            <article className="simulation-card">
+              <h3>Data depth</h3>
+              <p>Planned inputs: expanded player states, lineup assumptions, substitutions, tactical branches and scenario presets.</p>
+            </article>
+          </div>
+        </section>
       ) : (
         <section className="panel">
           <div className="section-header">
