@@ -336,6 +336,130 @@
   border-color: rgba(8, 28, 54, 0.08);
 }
 
+.prediction-explanation {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(8, 28, 54, 0.08);
+}
+
+.prediction-details {
+  border: 1px solid rgba(8, 28, 54, 0.08);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.78);
+  overflow: hidden;
+}
+
+.prediction-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  font-weight: 800;
+  color: var(--text-strong);
+}
+
+.prediction-summary::-webkit-details-marker {
+  display: none;
+}
+
+.prediction-summary::after {
+  content: '+';
+  font-size: 1rem;
+  color: var(--muted);
+}
+
+.prediction-details[open] .prediction-summary::after {
+  content: '-';
+}
+
+.prediction-explanation-section {
+  display: grid;
+  gap: 8px;
+}
+
+.prediction-details-content {
+  padding: 0 14px 14px;
+}
+
+.prediction-factor-list,
+.prediction-input-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.factor-pill,
+.prediction-input-item {
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 0.78rem;
+  line-height: 1.2;
+}
+
+.factor-pill {
+  border: 1px solid rgba(8, 28, 54, 0.08);
+  background: rgba(8, 28, 54, 0.05);
+  color: var(--text-strong);
+  font-weight: 700;
+}
+
+.factor-pill-positive {
+  background: rgba(23, 134, 92, 0.12);
+  border-color: rgba(23, 134, 92, 0.16);
+  color: #0d6a47;
+}
+
+.factor-pill-negative {
+  background: rgba(178, 57, 31, 0.1);
+  border-color: rgba(178, 57, 31, 0.14);
+  color: #8f2f17;
+}
+
+.prediction-input-item {
+  display: inline-grid;
+  gap: 2px;
+  background: white;
+  border: 1px solid rgba(8, 28, 54, 0.08);
+  color: var(--muted);
+}
+
+.prediction-input-item strong {
+  color: var(--text-strong);
+}
+
+.prediction-history {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.prediction-history-list {
+  display: grid;
+  gap: 8px;
+}
+
+.prediction-history-item {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(8, 28, 54, 0.08);
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.prediction-history-item strong {
+  color: var(--text-strong);
+  text-transform: capitalize;
+}
+
 .knockout-slot-box {
   display: flex;
   justify-content: space-between;

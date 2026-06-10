@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import './App.css'
 import { getAnnexCAssignment } from './annexC'
+import { knockoutScheduleByMatchId, type KnockoutScheduleItem } from './knockoutSchedule'
 
 type ViewMode = 'group' | 'bracket'
 
@@ -46,6 +47,49 @@ type Prediction = {
   awayExpectedGoals: number
   modelStrength: number
   summary: string
+  factorBreakdown: PredictionFactor[]
+  inputSnapshot: PredictionInputSnapshot[]
+  knockoutWinnerTeamId?: string
+  knockoutResolution?: 'regularTime' | 'extraTime' | 'penalties'
+  penaltyScore?: string
+}
+
+type PredictionFactor = {
+  label: string
+  impact: number
+}
+
+type PredictionInputSnapshot = {
+  label: string
+  value: string
+}
+
+type GroupStateContext = {
+  homeGroupPosition: number
+  awayGroupPosition: number
+  homePointsBefore: number
+  awayPointsBefore: number
+  homeRotationRisk: number
+  awayRotationRisk: number
+  homeMotivationBoost: number
+  awayMotivationBoost: number
+  drawToleranceSwing: number
+}
+
+type PredictionHistoryEntry = {
+  id: string
+  createdAt: string
+  action: 'generated' | 'accepted' | 'manual' | 'reset' | 'invalidated' | 'live_refresh'
+  stage: 'group' | 'knockout'
+  summary: string
+  source: 'model' | 'manual' | 'system'
+  prediction?: Prediction
+}
+
+type TeamLiveForm = TeamRecentData & {
+  source: string
+  refreshedAt: string
+  sampleSize: number
 }
 
 type Match = {
@@ -73,6 +117,7 @@ type Match = {
   manualAwayGoals?: string
   prediction?: Prediction
   acceptedPrediction?: Prediction
+  predictionHistory?: PredictionHistoryEntry[]
 }
 
 type Standing = {
@@ -118,6 +163,7 @@ type KnockoutMatch = {
   acceptedPrediction?: Prediction
   lastResolvedHomeTeamId?: string
   lastResolvedAwayTeamId?: string
+  predictionHistory?: PredictionHistoryEntry[]
 }
 
 type ResolvedKnockoutMatch = {
@@ -126,7 +172,20 @@ type ResolvedKnockoutMatch = {
   awayTeam: Team | null
   displayHomeSlot: string
   displayAwaySlot: string
+  schedule: KnockoutMatchScheduleContext | null
   note?: string
+}
+
+type KnockoutMatchScheduleContext = KnockoutScheduleItem & {
+  kickoffUtc: string
+  localDateLabel: string
+  localTimeLabel: string
+  polishDateLabel: string
+  polishTimeLabel: string
+  restDaysHome: number
+  restDaysAway: number
+  travelKmHome: number
+  travelKmAway: number
 }
 
 type RawScheduleItem = {
@@ -475,7 +534,24 @@ const storageKeys = {
   groupMatches: 'world-cup-betting-system/group-matches',
   knockoutMatches: 'world-cup-betting-system/knockout-matches',
   activeView: 'world-cup-betting-system/active-view',
+  liveTeamForm: 'world-cup-betting-system/live-team-form',
 } as const
+
+const liveSearchTeamNames: Partial<Record<string, string>> = {
+  usa: 'United States',
+  kor: 'South Korea',
+  cze: 'Czech Republic',
+  bih: 'Bosnia and Herzegovina',
+  sco: 'Scotland',
+  tur: 'Turkiye',
+  cuw: 'Curacao',
+  civ: "Ivory Coast",
+  cpv: 'Cape Verde',
+  irq: 'Iraq',
+  alg: 'Algeria',
+  cod: 'DR Congo',
+  eng: 'England',
+}
 
 const knockoutMatchTemplates: Omit<KnockoutMatch, 'prediction' | 'acceptedPrediction'>[] = [
   ...fixedRoundOf32Rules.map(([id, homeSlot, awaySlot]) => ({
@@ -565,6 +641,39 @@ function parseEtDateTime(dateLabel: string, etLabel: string) {
   return new Date(Date.UTC(2026, month, day, hours + 4, minutes))
 }
 
+function parseVenueLocalDateTime(dateIso: string, localTime: string, venueCity: string) {
+  const venueMeta = venueMetaByCity[venueCity]
+
+  if (!venueMeta) {
+    throw new Error(`Unsupported venue city for knockout schedule: ${venueCity}`)
+  }
+
+  const [year, month, day] = dateIso.split('-').map(Number)
+  const [hours, minutes] = localTime.split(':').map(Number)
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: venueMeta.timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  })
+  const target = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')} ${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+
+  for (let hourOffset = -12; hourOffset <= 14; hourOffset += 1) {
+    const candidate = new Date(Date.UTC(year, month - 1, day, hours - hourOffset, minutes))
+    const parts = formatter.formatToParts(candidate)
+    const candidateLabel = `${parts.find((part) => part.type === 'year')?.value}-${parts.find((part) => part.type === 'month')?.value}-${parts.find((part) => part.type === 'day')?.value} ${parts.find((part) => part.type === 'hour')?.value}:${parts.find((part) => part.type === 'minute')?.value}`
+
+    if (candidateLabel === target) {
+      return candidate
+    }
+  }
+
+  return new Date(Date.UTC(year, month - 1, day, hours, minutes))
+}
+
 function formatDateTime(date: Date, timeZone: string) {
   const dateLabel = new Intl.DateTimeFormat('en-GB', {
     timeZone,
@@ -581,6 +690,21 @@ function formatDateTime(date: Date, timeZone: string) {
   }).format(date)
 
   return { dateLabel, timeLabel }
+}
+
+function buildHistoryEntry(entry: Omit<PredictionHistoryEntry, 'id' | 'createdAt'>): PredictionHistoryEntry {
+  return {
+    ...entry,
+    id: `${entry.stage}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function appendHistory(
+  existingHistory: PredictionHistoryEntry[] | undefined,
+  entry: Omit<PredictionHistoryEntry, 'id' | 'createdAt'>,
+) {
+  return [...(existingHistory ?? []), buildHistoryEntry(entry)]
 }
 
 function getFlagUrl(team: Team) {
@@ -708,6 +832,7 @@ function mergeStoredGroupMatches(storedMatches: Match[] | null) {
           manualAwayGoals: storedMatch.manualAwayGoals ?? '',
           prediction: storedMatch.prediction,
           acceptedPrediction: storedMatch.acceptedPrediction,
+          predictionHistory: storedMatch.predictionHistory ?? [],
         }
       : match
   })
@@ -736,6 +861,7 @@ function mergeStoredKnockoutMatches(storedMatches: KnockoutMatch[] | null) {
           acceptedPrediction: storedMatch.acceptedPrediction,
           lastResolvedHomeTeamId: storedMatch.lastResolvedHomeTeamId,
           lastResolvedAwayTeamId: storedMatch.lastResolvedAwayTeamId,
+          predictionHistory: storedMatch.predictionHistory ?? [],
         }
       : match
   })
@@ -754,7 +880,24 @@ function roundTo(value: number, digits: number) {
   return Math.round(value * factor) / factor
 }
 
-function getTeamRecentData(team: Team): TeamRecentData {
+function formatSigned(value: number, digits = 2) {
+  const rounded = roundTo(value, digits)
+  return `${rounded >= 0 ? '+' : ''}${rounded}`
+}
+
+function getTeamRecentData(team: Team, liveTeamForm?: Partial<Record<string, TeamLiveForm>>): TeamRecentData {
+  const liveOverride = liveTeamForm?.[team.id]
+
+  if (liveOverride) {
+    return {
+      lastFivePointsPerMatch: liveOverride.lastFivePointsPerMatch,
+      goalsForPerMatch: liveOverride.goalsForPerMatch,
+      goalsAgainstPerMatch: liveOverride.goalsAgainstPerMatch,
+      cleanSheetRate: liveOverride.cleanSheetRate,
+      injuryBurden: liveOverride.injuryBurden,
+    }
+  }
+
   const ratingBase = (team.rating - 70) / 20
   const hashBase = teamHash(team)
   const overrides = teamRecentDataOverrides[team.id]
@@ -766,6 +909,85 @@ function getTeamRecentData(team: Team): TeamRecentData {
       overrides?.goalsAgainstPerMatch ?? clamp(1.35 - ratingBase * 0.26 + ((hashBase * 5) % 4) * 0.06, 0.55, 1.8),
     cleanSheetRate: overrides?.cleanSheetRate ?? clamp(0.18 + ratingBase * 0.12 + ((hashBase * 7) % 4) * 0.04, 0.1, 0.62),
     injuryBurden: overrides?.injuryBurden ?? clamp(0.05 + ((hashBase * 11) % 6) * 0.015, 0.04, 0.16),
+  }
+}
+
+async function fetchLiveTeamForm(team: Team): Promise<TeamLiveForm | null> {
+  const searchName = liveSearchTeamNames[team.id] ?? team.name
+  const teamResponse = await fetch(`https://www.thesportsdb.com/api/v1/json/123/searchteams.php?t=${encodeURIComponent(searchName)}`)
+
+  if (!teamResponse.ok) {
+    return null
+  }
+
+  const teamPayload = (await teamResponse.json()) as { teams?: Array<{ idTeam?: string; strTeam?: string; strSport?: string }> }
+  const selectedTeam = teamPayload.teams?.find((candidate) => candidate.strSport === 'Soccer' && candidate.idTeam)
+
+  if (!selectedTeam?.idTeam) {
+    return null
+  }
+
+  const lastEventsResponse = await fetch(`https://www.thesportsdb.com/api/v1/json/123/eventslast.php?id=${selectedTeam.idTeam}`)
+
+  if (!lastEventsResponse.ok) {
+    return null
+  }
+
+  const lastEventsPayload = (await lastEventsResponse.json()) as {
+    results?: Array<{
+      strHomeTeam?: string
+      strAwayTeam?: string
+      intHomeScore?: string
+      intAwayScore?: string
+      strStatus?: string
+    }>
+  }
+  const results = (lastEventsPayload.results ?? [])
+    .filter((event) => event.strStatus === 'Match Finished' || event.intHomeScore !== undefined)
+    .slice(0, 5)
+
+  if (results.length === 0) {
+    return null
+  }
+
+  let points = 0
+  let goalsFor = 0
+  let goalsAgainst = 0
+  let cleanSheets = 0
+
+  results.forEach((event) => {
+    const homeGoals = Number(event.intHomeScore ?? 0)
+    const awayGoals = Number(event.intAwayScore ?? 0)
+    const isHome = event.strHomeTeam?.toLowerCase() === (selectedTeam.strTeam ?? searchName).toLowerCase()
+    const teamGoals = isHome ? homeGoals : awayGoals
+    const opponentGoals = isHome ? awayGoals : homeGoals
+
+    goalsFor += teamGoals
+    goalsAgainst += opponentGoals
+
+    if (opponentGoals === 0) {
+      cleanSheets += 1
+    }
+
+    if (teamGoals > opponentGoals) {
+      points += 3
+    } else if (teamGoals === opponentGoals) {
+      points += 1
+    }
+  })
+
+  const sampleSize = results.length
+  const ratingInjuryBaseline = teamRecentDataOverrides[team.id]?.injuryBurden ?? clamp(0.05 + (5 - sampleSize) * 0.01, 0.04, 0.12)
+
+  return {
+    lastFivePointsPerMatch: roundTo(points / sampleSize, 2),
+    goalsForPerMatch: roundTo(goalsFor / sampleSize, 2),
+    goalsAgainstPerMatch: roundTo(goalsAgainst / sampleSize, 2),
+    cleanSheetRate: roundTo(cleanSheets / sampleSize, 2),
+    injuryBurden: ratingInjuryBaseline,
+    source: 'TheSportsDB recent team results',
+    refreshedAt: new Date().toISOString(),
+    sampleSize,
   }
 }
 
@@ -901,6 +1123,8 @@ function predictMatch(
   venueCity: string,
   attempt = 0,
   context?: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'>,
+  liveTeamForm?: Partial<Record<string, TeamLiveForm>>,
+  options?: { knockout?: boolean; groupState?: GroupStateContext },
 ): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
   const homeAttack = getAttackStrength(homeTeam)
@@ -909,8 +1133,10 @@ function predictMatch(
   const awayDefense = getDefenseStrength(awayTeam)
   const homeProfile = getTeamModelProfile(homeTeam)
   const awayProfile = getTeamModelProfile(awayTeam)
-  const homeRecent = getTeamRecentData(homeTeam)
-  const awayRecent = getTeamRecentData(awayTeam)
+  const homeRecent = getTeamRecentData(homeTeam, liveTeamForm)
+  const awayRecent = getTeamRecentData(awayTeam, liveTeamForm)
+  const homeLiveSource = liveTeamForm?.[homeTeam.id]
+  const awayLiveSource = liveTeamForm?.[awayTeam.id]
   const formSwing = getFormFactor(homeTeam, attempt) - getFormFactor(awayTeam, attempt)
   const homeHostBoost = getHostVenueBoost(homeTeam, venueCity)
   const awayHostBoost = getHostVenueBoost(awayTeam, venueCity)
@@ -928,6 +1154,9 @@ function predictMatch(
   const injurySwing = (awayRecent.injuryBurden - homeRecent.injuryBurden) * 0.2
   const restSwing = getRestImpact(context?.restDaysHome ?? 5) - getRestImpact(context?.restDaysAway ?? 5)
   const travelSwing = getTravelImpact(context?.travelKmHome ?? 0) - getTravelImpact(context?.travelKmAway ?? 0)
+  const rotationSwing = (options?.groupState?.awayRotationRisk ?? 0) - (options?.groupState?.homeRotationRisk ?? 0)
+  const motivationSwing = (options?.groupState?.homeMotivationBoost ?? 0) - (options?.groupState?.awayMotivationBoost ?? 0)
+  const drawToleranceSwing = options?.groupState?.drawToleranceSwing ?? 0
   const homeExpectedGoals = clamp(
     1.18 +
       homeAttack * 0.62 -
@@ -941,6 +1170,8 @@ function predictMatch(
       injurySwing +
       restSwing +
       travelSwing +
+      rotationSwing +
+      motivationSwing +
       creationSwing * 0.18 +
       finishingSwing * 0.12 +
       setPieceSwing * 0.08 +
@@ -965,6 +1196,8 @@ function predictMatch(
       injurySwing * -0.95 +
       restSwing * -0.95 +
       travelSwing * -0.95 +
+      rotationSwing * -0.95 +
+      motivationSwing * -0.95 +
       (awayProfile.chanceCreation - homeProfile.chanceCreation) * 0.17 +
       (awayProfile.finishing - homeProfile.finishing) * 0.12 +
       (awayProfile.setPieces - homeProfile.setPieces) * 0.08 +
@@ -983,13 +1216,16 @@ function predictMatch(
   let bestScoreProbability = -1
   let homeGoals = 0
   let awayGoals = 0
+  const drawBiasMultiplier = clamp(1 + drawToleranceSwing * 4.5, 0.78, 1.26)
+  const decisiveBiasMultiplier = clamp(1 - drawToleranceSwing * 2.1, 0.88, 1.12)
 
   for (let homeGoalCount = 0; homeGoalCount <= 6; homeGoalCount += 1) {
     const homeProbability = poissonProbability(homeGoalCount, homeExpectedGoals)
 
     for (let awayGoalCount = 0; awayGoalCount <= 6; awayGoalCount += 1) {
       const awayProbability = poissonProbability(awayGoalCount, awayExpectedGoals)
-      const scoreProbability = homeProbability * awayProbability
+      const rawScoreProbability = homeProbability * awayProbability
+      const scoreProbability = homeGoalCount === awayGoalCount ? rawScoreProbability * drawBiasMultiplier : rawScoreProbability * decisiveBiasMultiplier
 
       if (homeGoalCount > awayGoalCount) {
         homeWinProbability += scoreProbability
@@ -1007,17 +1243,25 @@ function predictMatch(
     }
   }
 
-  const homeWinPercent = roundTo(homeWinProbability * 100, 1)
-  const drawPercent = roundTo(drawProbability * 100, 1)
-  const awayWinPercent = roundTo(awayWinProbability * 100, 1)
-  const confidence = clamp(Math.round(Math.max(homeWinPercent, drawPercent, awayWinPercent)), 40, 92)
+  const totalProbability = homeWinProbability + drawProbability + awayWinProbability
+  const normalizedHomeWinProbability = totalProbability > 0 ? homeWinProbability / totalProbability : homeWinProbability
+  const normalizedDrawProbability = totalProbability > 0 ? drawProbability / totalProbability : drawProbability
+  const normalizedAwayWinProbability = totalProbability > 0 ? awayWinProbability / totalProbability : awayWinProbability
+  const homeWinPercent = roundTo(normalizedHomeWinProbability * 100, 1)
+  const drawPercent = roundTo(normalizedDrawProbability * 100, 1)
+  const awayWinPercent = roundTo(normalizedAwayWinProbability * 100, 1)
+  const confidence = clamp(
+    Math.round(Math.max(homeWinPercent, drawPercent, awayWinPercent) + Math.abs(drawToleranceSwing) * 18 + Math.abs(motivationSwing) * 12),
+    40,
+    92,
+  )
   const modelStrength = clamp(
     Math.round(
       58 +
         Math.abs(ratingGap) * 0.45 +
         Math.abs(creationSwing + finishingSwing + defensiveSwing + experienceSwing) * 14 +
         Math.abs(homeHostBoost - awayHostBoost) * 20 +
-        Math.abs(recentFormSwing + scoringSwing + injurySwing + restSwing + travelSwing) * 18,
+        Math.abs(recentFormSwing + scoringSwing + injurySwing + restSwing + travelSwing + rotationSwing + motivationSwing) * 18,
     ),
     50,
     94,
@@ -1043,6 +1287,98 @@ function predictMatch(
     context
       ? 'Recent form, rest windows and inter-city travel are also included.'
       : 'The schedule layer is using neutral knockout assumptions for now.'
+  const groupStateSummary = options?.groupState
+    ? 'The group-state layer considers points, table position, likely rotation and whether a draw may already suit one side.'
+    : 'The group-state layer is not active for this match.'
+  const factorBreakdown: PredictionFactor[] = [
+    { label: 'Rating edge', impact: ratingGap / 90 },
+    { label: 'Team profile edge', impact: creationSwing * 0.18 + finishingSwing * 0.12 + setPieceSwing * 0.08 + experienceSwing * 0.05 },
+    { label: 'Recent form edge', impact: recentFormSwing + scoringSwing + defensiveRecordSwing + cleanSheetSwing },
+    { label: 'Injury edge', impact: injurySwing },
+    { label: 'Rest edge', impact: restSwing },
+    { label: 'Travel edge', impact: travelSwing },
+    { label: 'Rotation risk edge', impact: rotationSwing },
+    { label: 'Motivation edge', impact: motivationSwing },
+    { label: 'Draw tolerance swing', impact: drawToleranceSwing },
+    { label: 'Venue and altitude edge', impact: homeHostBoost - awayHostBoost * 0.4 + homeAltitudeAdjustment - awayAltitudeAdjustment * 0.35 },
+  ]
+    .sort((left, right) => Math.abs(right.impact) - Math.abs(left.impact))
+    .map((factor) => ({
+      label: factor.label,
+      impact: roundTo(factor.impact, 3),
+    }))
+  const inputSnapshot: PredictionInputSnapshot[] = [
+    { label: `${homeTeam.name} rating`, value: String(homeTeam.rating) },
+    { label: `${awayTeam.name} rating`, value: String(awayTeam.rating) },
+    { label: 'Venue', value: venueCity },
+    { label: 'Data source', value: homeLiveSource || awayLiveSource ? 'Live team form refresh + seeded team model' : 'Seeded team model' },
+    { label: 'Rest days', value: context ? `${context.restDaysHome} vs ${context.restDaysAway}` : 'neutral knockout assumption' },
+    { label: 'Travel km', value: context ? `${context.travelKmHome} vs ${context.travelKmAway}` : 'neutral knockout assumption' },
+    { label: 'Recent points per match', value: `${roundTo(homeRecent.lastFivePointsPerMatch, 2)} vs ${roundTo(awayRecent.lastFivePointsPerMatch, 2)}` },
+    { label: 'Goals for per match', value: `${roundTo(homeRecent.goalsForPerMatch, 2)} vs ${roundTo(awayRecent.goalsForPerMatch, 2)}` },
+    { label: 'Goals against per match', value: `${roundTo(homeRecent.goalsAgainstPerMatch, 2)} vs ${roundTo(awayRecent.goalsAgainstPerMatch, 2)}` },
+    { label: 'Injury burden', value: `${roundTo(homeRecent.injuryBurden, 2)} vs ${roundTo(awayRecent.injuryBurden, 2)}` },
+    {
+      label: 'Group stakes',
+      value: options?.groupState
+        ? `P${options.groupState.homeGroupPosition} ${options.groupState.homePointsBefore} pts vs P${options.groupState.awayGroupPosition} ${options.groupState.awayPointsBefore} pts`
+        : 'not applied',
+    },
+  ]
+  let knockoutWinnerTeamId: string | undefined
+  let knockoutResolution: Prediction['knockoutResolution']
+  let penaltyScore: string | undefined
+
+  if (options?.knockout) {
+    if (homeGoals !== awayGoals) {
+      knockoutWinnerTeamId = homeGoals > awayGoals ? homeTeam.id : awayTeam.id
+      knockoutResolution = 'regularTime'
+    } else {
+      const extraTimeHomeExpectedGoals = clamp(homeExpectedGoals * 0.32 + experienceSwing * 0.05 + restSwing * 0.4 + travelSwing * 0.25, 0.08, 1.2)
+      const extraTimeAwayExpectedGoals = clamp(awayExpectedGoals * 0.32 - experienceSwing * 0.05 - restSwing * 0.35 - travelSwing * 0.25, 0.08, 1.2)
+      let extraTimeBestProbability = -1
+      let extraTimeHomeGoals = 0
+      let extraTimeAwayGoals = 0
+      let extraTimeDrawProbability = 0
+
+      for (let homeGoalCount = 0; homeGoalCount <= 2; homeGoalCount += 1) {
+        const homeProbability = poissonProbability(homeGoalCount, extraTimeHomeExpectedGoals)
+
+        for (let awayGoalCount = 0; awayGoalCount <= 2; awayGoalCount += 1) {
+          const awayProbability = poissonProbability(awayGoalCount, extraTimeAwayExpectedGoals)
+          const scoreProbability = homeProbability * awayProbability
+
+          if (homeGoalCount === awayGoalCount) {
+            extraTimeDrawProbability += scoreProbability
+          }
+
+          if (scoreProbability > extraTimeBestProbability) {
+            extraTimeBestProbability = scoreProbability
+            extraTimeHomeGoals = homeGoalCount
+            extraTimeAwayGoals = awayGoalCount
+          }
+        }
+      }
+
+      if (extraTimeHomeGoals !== extraTimeAwayGoals && extraTimeDrawProbability <= 0.62) {
+        homeGoals += extraTimeHomeGoals
+        awayGoals += extraTimeAwayGoals
+        knockoutWinnerTeamId = homeGoals > awayGoals ? homeTeam.id : awayTeam.id
+        knockoutResolution = 'extraTime'
+      } else {
+        const penaltyEdge =
+          experienceSwing * 0.7 +
+          finishingSwing * 0.55 +
+          injurySwing * 0.25 +
+          restSwing * 0.35 +
+          (getFormFactor(homeTeam, attempt + 3) - getFormFactor(awayTeam, attempt + 3)) * 0.4
+        const homePenaltyWins = penaltyEdge >= 0
+        knockoutWinnerTeamId = homePenaltyWins ? homeTeam.id : awayTeam.id
+        knockoutResolution = 'penalties'
+        penaltyScore = homePenaltyWins ? '4-3' : '3-4'
+      }
+    }
+  }
 
   return {
     homeGoals,
@@ -1054,10 +1390,15 @@ function predictMatch(
     homeExpectedGoals: roundTo(homeExpectedGoals, 2),
     awayExpectedGoals: roundTo(awayExpectedGoals, 2),
     modelStrength,
+    factorBreakdown,
+    inputSnapshot,
+    knockoutWinnerTeamId,
+    knockoutResolution,
+    penaltyScore,
     summary:
       attempt > 0
-        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary}`
-        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary}`,
+        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`
+        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`,
   }
 }
 
@@ -1122,6 +1463,74 @@ function buildStandings(matches: Match[]) {
 
     return accumulator
   }, {})
+}
+
+function getGroupStateContext(match: Match, matches: Match[]): GroupStateContext {
+  const priorMatches = matches.filter(
+    (candidate) =>
+      candidate.group === match.group &&
+      candidate.id !== match.id &&
+      Boolean(candidate.acceptedPrediction) &&
+      (new Date(candidate.kickoffUtc).getTime() < new Date(match.kickoffUtc).getTime() ||
+        (candidate.kickoffUtc === match.kickoffUtc && candidate.id < match.id)),
+  )
+
+  const standingsBeforeMatch = buildStandings(priorMatches)
+  const table = standingsBeforeMatch[match.group] ?? []
+  const homeStanding = table.find((standing) => standing.team.id === match.homeTeam.id)
+  const awayStanding = table.find((standing) => standing.team.id === match.awayTeam.id)
+  const homeGroupPosition = homeStanding ? table.findIndex((standing) => standing.team.id === match.homeTeam.id) + 1 : 4
+  const awayGroupPosition = awayStanding ? table.findIndex((standing) => standing.team.id === match.awayTeam.id) + 1 : 4
+  const homePointsBefore = homeStanding?.points ?? 0
+  const awayPointsBefore = awayStanding?.points ?? 0
+  const isLastRound = match.round === 5 || match.round === 6
+  const homeLead = homePointsBefore - awayPointsBefore
+  const awayLead = awayPointsBefore - homePointsBefore
+  const homeRotationRisk =
+    isLastRound && homeGroupPosition === 1 && homePointsBefore >= 6 && homeLead >= 2
+      ? 0.08
+      : isLastRound && homePointsBefore >= 4 && homeGroupPosition <= 2
+        ? 0.03
+        : 0
+  const awayRotationRisk =
+    isLastRound && awayGroupPosition === 1 && awayPointsBefore >= 6 && awayLead >= 2
+      ? 0.08
+      : isLastRound && awayPointsBefore >= 4 && awayGroupPosition <= 2
+        ? 0.03
+        : 0
+  const homeMotivationBoost =
+    isLastRound && homePointsBefore <= 3
+      ? 0.05
+      : homeGroupPosition >= 3 && homePointsBefore < 4
+        ? 0.03
+        : 0
+  const awayMotivationBoost =
+    isLastRound && awayPointsBefore <= 3
+      ? 0.05
+      : awayGroupPosition >= 3 && awayPointsBefore < 4
+        ? 0.03
+        : 0
+  const drawToleranceSwing =
+    isLastRound
+      ? clamp(
+          (homeGroupPosition <= 2 && homePointsBefore >= 4 ? -0.03 : 0) +
+            (awayGroupPosition <= 2 && awayPointsBefore >= 4 ? 0.03 : 0),
+          -0.06,
+          0.06,
+        )
+      : 0
+
+  return {
+    homeGroupPosition,
+    awayGroupPosition,
+    homePointsBefore,
+    awayPointsBefore,
+    homeRotationRisk,
+    awayRotationRisk,
+    homeMotivationBoost,
+    awayMotivationBoost,
+    drawToleranceSwing,
+  }
 }
 
 function rankThirdPlacedTeams(standings: Record<string, Standing[]>) {
@@ -1219,13 +1628,56 @@ function buildRoundOf32(standings: Record<string, Standing[]>, rankedThirds: Ran
   return [...fixedMatches, ...wildcardMatches].sort((left, right) => Number(left.id) - Number(right.id))
 }
 
+function getLastPlayedMatchContext(
+  teamId: string,
+  matches: Match[],
+  resolvedKnockoutMatches: ResolvedKnockoutMatch[],
+  currentMatchId: string,
+) {
+  const acceptedGroupMatch = matches
+    .filter((match) => match.acceptedPrediction && (match.homeTeam.id === teamId || match.awayTeam.id === teamId))
+    .sort((left, right) => new Date(right.kickoffUtc).getTime() - new Date(left.kickoffUtc).getTime())[0]
+
+  const acceptedKnockoutMatch = resolvedKnockoutMatches
+    .filter(
+      (resolvedMatch) =>
+        resolvedMatch.match.id !== currentMatchId &&
+        resolvedMatch.match.acceptedPrediction &&
+        (resolvedMatch.homeTeam?.id === teamId || resolvedMatch.awayTeam?.id === teamId) &&
+        resolvedMatch.schedule,
+    )
+    .sort(
+      (left, right) =>
+        new Date(right.schedule!.kickoffUtc).getTime() - new Date(left.schedule!.kickoffUtc).getTime(),
+    )[0]
+
+  const groupTimestamp = acceptedGroupMatch ? new Date(acceptedGroupMatch.kickoffUtc).getTime() : -1
+  const knockoutTimestamp = acceptedKnockoutMatch?.schedule ? new Date(acceptedKnockoutMatch.schedule.kickoffUtc).getTime() : -1
+
+  if (knockoutTimestamp > groupTimestamp && acceptedKnockoutMatch?.schedule) {
+    return {
+      kickoffUtc: acceptedKnockoutMatch.schedule.kickoffUtc,
+      venueCity: acceptedKnockoutMatch.schedule.venueCity,
+    }
+  }
+
+  if (acceptedGroupMatch) {
+    return {
+      kickoffUtc: acceptedGroupMatch.kickoffUtc,
+      venueCity: acceptedGroupMatch.venueCity,
+    }
+  }
+
+  return null
+}
+
 function getKnockoutWinner(match: KnockoutMatch, homeTeam: Team | null, awayTeam: Team | null) {
   if (!match.acceptedPrediction || !homeTeam || !awayTeam) {
     return null
   }
 
-  if (match.acceptedPrediction.homeGoals === match.acceptedPrediction.awayGoals) {
-    return null
+  if (match.acceptedPrediction.knockoutWinnerTeamId) {
+    return match.acceptedPrediction.knockoutWinnerTeamId === homeTeam.id ? homeTeam : awayTeam
   }
 
   return match.acceptedPrediction.homeGoals > match.acceptedPrediction.awayGoals ? homeTeam : awayTeam
@@ -1236,8 +1688,8 @@ function getKnockoutLoser(match: KnockoutMatch, homeTeam: Team | null, awayTeam:
     return null
   }
 
-  if (match.acceptedPrediction.homeGoals === match.acceptedPrediction.awayGoals) {
-    return null
+  if (match.acceptedPrediction.knockoutWinnerTeamId) {
+    return match.acceptedPrediction.knockoutWinnerTeamId === homeTeam.id ? awayTeam : homeTeam
   }
 
   return match.acceptedPrediction.homeGoals > match.acceptedPrediction.awayGoals ? awayTeam : homeTeam
@@ -1245,6 +1697,7 @@ function getKnockoutLoser(match: KnockoutMatch, homeTeam: Team | null, awayTeam:
 
 function resolveKnockoutMatches(
   knockoutMatches: KnockoutMatch[],
+  groupMatches: Match[],
   standings: Record<string, Standing[]>,
   rankedThirds: RankedThird[],
 ) {
@@ -1305,6 +1758,50 @@ function resolveKnockoutMatches(
               rankedThirds.find((standing) => standing.team.name === baseMatch.awayTeam)?.team ??
               null
             : null
+          const scheduleBase = knockoutScheduleByMatchId[match.id]
+          const schedule = scheduleBase
+            ? (() => {
+                const kickoff = parseVenueLocalDateTime(scheduleBase.dateIso, scheduleBase.localTime, scheduleBase.venueCity)
+                const localDateTime = formatDateTime(kickoff, venueMetaByCity[scheduleBase.venueCity].timeZone)
+                const polishDateTime = formatDateTime(kickoff, 'Europe/Warsaw')
+                const previousHomeMatch = homeTeam ? getLastPlayedMatchContext(homeTeam.id, groupMatches, [], match.id) : null
+                const previousAwayMatch = awayTeam ? getLastPlayedMatchContext(awayTeam.id, groupMatches, [], match.id) : null
+                const restDaysHome = previousHomeMatch
+                  ? roundTo((kickoff.getTime() - new Date(previousHomeMatch.kickoffUtc).getTime()) / (1000 * 60 * 60 * 24), 1)
+                  : 5
+                const restDaysAway = previousAwayMatch
+                  ? roundTo((kickoff.getTime() - new Date(previousAwayMatch.kickoffUtc).getTime()) / (1000 * 60 * 60 * 24), 1)
+                  : 5
+                const previousHomeVenue = previousHomeMatch ? venueMetaByCity[previousHomeMatch.venueCity] : null
+                const previousAwayVenue = previousAwayMatch ? venueMetaByCity[previousAwayMatch.venueCity] : null
+                const currentVenue = venueMetaByCity[scheduleBase.venueCity]
+                const travelKmHome =
+                  previousHomeVenue && currentVenue
+                    ? Math.round(
+                        calculateDistanceKm(previousHomeVenue.latitude, previousHomeVenue.longitude, currentVenue.latitude, currentVenue.longitude),
+                      )
+                    : 0
+                const travelKmAway =
+                  previousAwayVenue && currentVenue
+                    ? Math.round(
+                        calculateDistanceKm(previousAwayVenue.latitude, previousAwayVenue.longitude, currentVenue.latitude, currentVenue.longitude),
+                      )
+                    : 0
+
+                return {
+                  ...scheduleBase,
+                  kickoffUtc: kickoff.toISOString(),
+                  localDateLabel: localDateTime.dateLabel,
+                  localTimeLabel: localDateTime.timeLabel,
+                  polishDateLabel: polishDateTime.dateLabel,
+                  polishTimeLabel: polishDateTime.timeLabel,
+                  restDaysHome,
+                  restDaysAway,
+                  travelKmHome,
+                  travelKmAway,
+                }
+              })()
+            : null
 
           resolvedById.set(match.id, {
             match,
@@ -1312,17 +1809,67 @@ function resolveKnockoutMatches(
             awayTeam,
             displayHomeSlot: baseMatch?.homeSlot ?? match.homeSlot,
             displayAwaySlot: baseMatch?.awaySlot ?? match.awaySlot,
+            schedule,
             note: baseMatch?.note,
           })
           return
         }
+        const scheduleBase = knockoutScheduleByMatchId[match.id]
+        const schedule = scheduleBase
+          ? (() => {
+              const kickoff = parseVenueLocalDateTime(scheduleBase.dateIso, scheduleBase.localTime, scheduleBase.venueCity)
+              const localDateTime = formatDateTime(kickoff, venueMetaByCity[scheduleBase.venueCity].timeZone)
+              const polishDateTime = formatDateTime(kickoff, 'Europe/Warsaw')
+              const earlierResolvedMatches = Array.from(resolvedById.values())
+              const previousHomeMatch = resolveFromSlot(match.homeSlot)
+                ? getLastPlayedMatchContext(resolveFromSlot(match.homeSlot)!.id, groupMatches, earlierResolvedMatches, match.id)
+                : null
+              const previousAwayMatch = resolveFromSlot(match.awaySlot)
+                ? getLastPlayedMatchContext(resolveFromSlot(match.awaySlot)!.id, groupMatches, earlierResolvedMatches, match.id)
+                : null
+              const restDaysHome = previousHomeMatch
+                ? roundTo((kickoff.getTime() - new Date(previousHomeMatch.kickoffUtc).getTime()) / (1000 * 60 * 60 * 24), 1)
+                : 5
+              const restDaysAway = previousAwayMatch
+                ? roundTo((kickoff.getTime() - new Date(previousAwayMatch.kickoffUtc).getTime()) / (1000 * 60 * 60 * 24), 1)
+                : 5
+              const previousHomeVenue = previousHomeMatch ? venueMetaByCity[previousHomeMatch.venueCity] : null
+              const previousAwayVenue = previousAwayMatch ? venueMetaByCity[previousAwayMatch.venueCity] : null
+              const currentVenue = venueMetaByCity[scheduleBase.venueCity]
+              const travelKmHome =
+                previousHomeVenue && currentVenue
+                  ? Math.round(
+                      calculateDistanceKm(previousHomeVenue.latitude, previousHomeVenue.longitude, currentVenue.latitude, currentVenue.longitude),
+                    )
+                  : 0
+              const travelKmAway =
+                previousAwayVenue && currentVenue
+                  ? Math.round(
+                      calculateDistanceKm(previousAwayVenue.latitude, previousAwayVenue.longitude, currentVenue.latitude, currentVenue.longitude),
+                    )
+                  : 0
 
+              return {
+                ...scheduleBase,
+                kickoffUtc: kickoff.toISOString(),
+                localDateLabel: localDateTime.dateLabel,
+                localTimeLabel: localDateTime.timeLabel,
+                polishDateLabel: polishDateTime.dateLabel,
+                polishTimeLabel: polishDateTime.timeLabel,
+                restDaysHome,
+                restDaysAway,
+                travelKmHome,
+                travelKmAway,
+              }
+            })()
+          : null
         resolvedById.set(match.id, {
           match,
           homeTeam: resolveFromSlot(match.homeSlot),
           awayTeam: resolveFromSlot(match.awaySlot),
           displayHomeSlot: match.homeSlot,
           displayAwaySlot: match.awaySlot,
+          schedule,
         })
       })
   })
@@ -1352,8 +1899,76 @@ function sanitizeKnockoutMatches(knockoutMatches: KnockoutMatch[], resolvedMatch
       manualAwayGoals: '',
       prediction: undefined,
       acceptedPrediction: undefined,
+      predictionHistory:
+        match.prediction || match.acceptedPrediction
+          ? appendHistory(match.predictionHistory, {
+              action: 'invalidated',
+              stage: 'knockout',
+              source: 'system',
+              summary: 'Stored knockout prediction was cleared because the participating teams changed.',
+            })
+          : match.predictionHistory,
     }
   })
+}
+
+function renderPredictionExplanation(prediction: Prediction) {
+  return (
+    <div className="prediction-explanation">
+      <details className="prediction-details">
+        <summary className="prediction-summary">Why this prediction?</summary>
+        <div className="prediction-explanation-section prediction-details-content">
+          <div className="prediction-factor-list">
+            {prediction.factorBreakdown.map((factor) => (
+              <span key={factor.label} className={`factor-pill ${factor.impact >= 0 ? 'factor-pill-positive' : 'factor-pill-negative'}`}>
+                {factor.label} {formatSigned(factor.impact, 3)}
+              </span>
+            ))}
+          </div>
+        </div>
+      </details>
+      <details className="prediction-details">
+        <summary className="prediction-summary">Model inputs</summary>
+        <div className="prediction-explanation-section prediction-details-content">
+          <div className="prediction-input-grid">
+            {prediction.inputSnapshot.map((item) => (
+              <span key={item.label} className="prediction-input-item">
+                <span>{item.label}</span>
+                <strong>{item.value}</strong>
+              </span>
+            ))}
+          </div>
+        </div>
+      </details>
+    </div>
+  )
+}
+
+function renderPredictionHistory(history: PredictionHistoryEntry[] | undefined) {
+  if (!history || history.length === 0) {
+    return null
+  }
+
+  return (
+    <details className="prediction-history prediction-details">
+      <summary className="prediction-summary">Prediction history</summary>
+      <div className="prediction-history-list prediction-details-content">
+        {[...history]
+          .slice(-5)
+          .reverse()
+          .map((entry) => (
+            <div key={entry.id} className="prediction-history-item">
+              <span>{new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(entry.createdAt))}</span>
+              <strong>{entry.action}</strong>
+              <span>
+                {entry.summary}
+                {entry.prediction ? ` · ${entry.prediction.confidence}% confidence` : ''}
+              </span>
+            </div>
+          ))}
+      </div>
+    </details>
+  )
 }
 
 function App() {
@@ -1362,12 +1977,19 @@ function App() {
     mergeStoredKnockoutMatches(loadStoredState<KnockoutMatch[]>(storageKeys.knockoutMatches)),
   )
   const [activeView, setActiveView] = useState<ViewMode>(() => loadStoredState<ViewMode>(storageKeys.activeView) ?? 'group')
+  const [liveTeamForm, setLiveTeamForm] = useState<Partial<Record<string, TeamLiveForm>>>(() =>
+    loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
+  )
+  const [isRefreshingLiveData, setIsRefreshingLiveData] = useState(false)
   const standings = buildStandings(matches)
   const rankedThirds = rankThirdPlacedTeams(standings)
-  const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(knockoutMatches, standings, rankedThirds)
+  const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(knockoutMatches, matches, standings, rankedThirds)
   const displayKnockoutMatches = sanitizeKnockoutMatches(knockoutMatches, preliminaryResolvedKnockoutMatches)
-  const resolvedKnockoutMatches = resolveKnockoutMatches(displayKnockoutMatches, standings, rankedThirds)
+  const resolvedKnockoutMatches = resolveKnockoutMatches(displayKnockoutMatches, matches, standings, rankedThirds)
   const acceptedCount = matches.filter((match) => match.acceptedPrediction).length
+  const latestLiveRefresh = Object.values(liveTeamForm)
+    .map((entry) => (entry?.refreshedAt ? new Date(entry.refreshedAt).getTime() : 0))
+    .sort((left, right) => right - left)[0]
   const knockoutStageConfig: { stage: KnockoutStage; title: string; subtitle: string }[] = [
     { stage: 'roundOf32', title: 'Round of 32', subtitle: '32 teams enter the bracket here.' },
     { stage: 'roundOf16', title: 'Round of 16', subtitle: 'Winners from the opening knockout round.' },
@@ -1389,18 +2011,67 @@ function App() {
     window.localStorage.setItem(storageKeys.activeView, JSON.stringify(activeView))
   }, [activeView])
 
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.liveTeamForm, JSON.stringify(liveTeamForm))
+  }, [liveTeamForm])
+
+  useEffect(() => {
+    if (latestLiveRefresh && Date.now() - latestLiveRefresh < 1000 * 60 * 60 * 6) {
+      return
+    }
+
+    void handleRefreshLiveData()
+  }, [latestLiveRefresh])
+
+  async function handleRefreshLiveData() {
+    setIsRefreshingLiveData(true)
+
+    try {
+      const uniqueTeams = groupDefinitions.flatMap((groupDefinition) => groupDefinition.teams)
+      const liveResults = await Promise.all(
+        uniqueTeams.map(async (team) => ({
+          teamId: team.id,
+          liveForm: await fetchLiveTeamForm(team),
+        })),
+      )
+
+      const nextLiveTeamForm = liveResults.reduce<Partial<Record<string, TeamLiveForm>>>((accumulator, item) => {
+        if (item.liveForm) {
+          accumulator[item.teamId] = item.liveForm
+        }
+
+        return accumulator
+      }, {})
+
+      if (Object.keys(nextLiveTeamForm).length > 0) {
+        setLiveTeamForm(nextLiveTeamForm)
+      }
+    } finally {
+      setIsRefreshingLiveData(false)
+    }
+  }
+
   function handleTryToPredict(matchId: string) {
     setMatches((currentMatches) =>
       currentMatches.map((match) =>
         match.id === matchId
           ? (() => {
               const nextAttempt = (match.predictionAttempt ?? 0) + 1
+              const groupState = getGroupStateContext(match, currentMatches)
+              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, { groupState })
 
               return {
                 ...match,
                 predictionAttempt: nextAttempt,
                 manualEditorOpen: false,
-                prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match),
+                prediction,
+                predictionHistory: appendHistory(match.predictionHistory, {
+                  action: 'generated',
+                  stage: 'group',
+                  source: 'model',
+                  summary: `Model prediction v${nextAttempt} generated.`,
+                  prediction,
+                }),
               }
             })()
           : match,
@@ -1416,12 +2087,21 @@ function App() {
         }
 
         const nextAttempt = (match.predictionAttempt ?? 0) + 1
+        const groupState = getGroupStateContext(match, currentMatches)
+        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, { groupState })
 
         return {
           ...match,
           predictionAttempt: nextAttempt,
           manualEditorOpen: false,
-          prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match),
+          prediction,
+          predictionHistory: appendHistory(match.predictionHistory, {
+            action: 'generated',
+            stage: 'group',
+            source: 'model',
+            summary: `Model prediction v${nextAttempt} generated.`,
+            prediction,
+          }),
         }
       }),
     )
@@ -1434,6 +2114,13 @@ function App() {
           ? {
               ...match,
               acceptedPrediction: match.prediction,
+              predictionHistory: appendHistory(match.predictionHistory, {
+                action: 'accepted',
+                stage: 'group',
+                source: 'system',
+                summary: 'Prediction accepted into the standings.',
+                prediction: match.prediction,
+              }),
             }
           : match,
       ),
@@ -1447,6 +2134,13 @@ function App() {
           ? {
               ...match,
               acceptedPrediction: match.prediction,
+              predictionHistory: appendHistory(match.predictionHistory, {
+                action: 'accepted',
+                stage: 'group',
+                source: 'system',
+                summary: 'Prediction accepted into the standings.',
+                prediction: match.prediction,
+              }),
             }
           : match,
       ),
@@ -1470,6 +2164,12 @@ function App() {
               manualAwayGoals: '',
               prediction: undefined,
               acceptedPrediction: undefined,
+              predictionHistory: appendHistory(match.predictionHistory, {
+                action: 'reset',
+                stage: 'group',
+                source: 'system',
+                summary: 'Prediction and accepted result were reset.',
+              }),
             }
           : match,
       ),
@@ -1528,21 +2228,36 @@ function App() {
           return match
         }
 
+        const prediction = {
+          homeGoals: Number(match.manualHomeGoals),
+          awayGoals: Number(match.manualAwayGoals),
+          confidence: 100,
+          homeWinProbability: Number(match.manualHomeGoals) > Number(match.manualAwayGoals) ? 100 : 0,
+          drawProbability: Number(match.manualHomeGoals) === Number(match.manualAwayGoals) ? 100 : 0,
+          awayWinProbability: Number(match.manualAwayGoals) > Number(match.manualHomeGoals) ? 100 : 0,
+          homeExpectedGoals: Number(match.manualHomeGoals),
+          awayExpectedGoals: Number(match.manualAwayGoals),
+          modelStrength: 100,
+          summary: 'Manual prediction entered by the user.',
+          factorBreakdown: [{ label: 'Manual override', impact: 1 }],
+          inputSnapshot: [
+            { label: 'Source', value: 'manual entry' },
+            { label: `${match.homeTeam.name} goals`, value: match.manualHomeGoals },
+            { label: `${match.awayTeam.name} goals`, value: match.manualAwayGoals },
+          ],
+        } satisfies Prediction
+
         return {
           ...match,
           manualEditorOpen: false,
-          prediction: {
-            homeGoals: Number(match.manualHomeGoals),
-            awayGoals: Number(match.manualAwayGoals),
-            confidence: 100,
-            homeWinProbability: Number(match.manualHomeGoals) > Number(match.manualAwayGoals) ? 100 : 0,
-            drawProbability: Number(match.manualHomeGoals) === Number(match.manualAwayGoals) ? 100 : 0,
-            awayWinProbability: Number(match.manualAwayGoals) > Number(match.manualHomeGoals) ? 100 : 0,
-            homeExpectedGoals: Number(match.manualHomeGoals),
-            awayExpectedGoals: Number(match.manualAwayGoals),
-            modelStrength: 100,
-            summary: 'Manual prediction entered by the user.',
-          },
+          prediction,
+          predictionHistory: appendHistory(match.predictionHistory, {
+            action: 'manual',
+            stage: 'group',
+            source: 'manual',
+            summary: 'Manual prediction saved.',
+            prediction,
+          }),
         }
       }),
     )
@@ -1560,21 +2275,35 @@ function App() {
         match.id === matchId
           ? (() => {
               const nextAttempt = (match.predictionAttempt ?? 0) + 1
-              let prediction = predictMatch(resolvedMatch.homeTeam!, resolvedMatch.awayTeam!, 'New York/New Jersey', nextAttempt)
-
-              if (prediction.homeGoals === prediction.awayGoals) {
-                prediction = {
-                  ...prediction,
-                  homeGoals: prediction.homeGoals + 1,
-                  summary: `${prediction.summary} A knockout tiebreak adjustment avoids unresolved draws.`,
-                }
-              }
+              const prediction = predictMatch(
+                resolvedMatch.homeTeam!,
+                resolvedMatch.awayTeam!,
+                resolvedMatch.schedule?.venueCity ?? 'New York/New Jersey',
+                nextAttempt,
+                resolvedMatch.schedule
+                  ? {
+                      restDaysHome: resolvedMatch.schedule.restDaysHome,
+                      restDaysAway: resolvedMatch.schedule.restDaysAway,
+                      travelKmHome: resolvedMatch.schedule.travelKmHome,
+                      travelKmAway: resolvedMatch.schedule.travelKmAway,
+                    }
+                  : undefined,
+                liveTeamForm,
+                { knockout: true },
+              )
 
               return {
                 ...match,
                 predictionAttempt: nextAttempt,
                 manualEditorOpen: false,
                 prediction,
+                predictionHistory: appendHistory(match.predictionHistory, {
+                  action: 'generated',
+                  stage: 'knockout',
+                  source: 'model',
+                  summary: `Knockout prediction v${nextAttempt} generated.`,
+                  prediction,
+                }),
               }
             })()
           : match,
@@ -1585,10 +2314,17 @@ function App() {
   function handleAcceptKnockout(matchId: string) {
     setKnockoutMatches((currentMatches) =>
       currentMatches.map((match) =>
-        match.id === matchId && match.prediction && match.prediction.homeGoals !== match.prediction.awayGoals
+        match.id === matchId && match.prediction
           ? {
               ...match,
               acceptedPrediction: match.prediction,
+              predictionHistory: appendHistory(match.predictionHistory, {
+                action: 'accepted',
+                stage: 'knockout',
+                source: 'system',
+                summary: 'Knockout prediction accepted.',
+                prediction: match.prediction,
+              }),
             }
           : match,
       ),
@@ -1607,6 +2343,12 @@ function App() {
               manualAwayGoals: '',
               prediction: undefined,
               acceptedPrediction: undefined,
+              predictionHistory: appendHistory(match.predictionHistory, {
+                action: 'reset',
+                stage: 'knockout',
+                source: 'system',
+                summary: 'Knockout prediction was reset.',
+              }),
             }
           : match,
       ),
@@ -1664,25 +2406,47 @@ function App() {
         const homeGoals = Number(match.manualHomeGoals)
         const awayGoals = Number(match.manualAwayGoals)
 
-        if (homeGoals === awayGoals) {
-          return match
-        }
+        const prediction = {
+          homeGoals,
+          awayGoals,
+          confidence: 100,
+          homeWinProbability: homeGoals > awayGoals ? 100 : 0,
+          drawProbability: homeGoals === awayGoals ? 100 : 0,
+          awayWinProbability: awayGoals > homeGoals ? 100 : 0,
+          homeExpectedGoals: homeGoals,
+          awayExpectedGoals: awayGoals,
+          modelStrength: 100,
+          summary:
+            homeGoals === awayGoals
+              ? 'Manual knockout prediction entered by the user. Winner resolved by penalties.'
+              : 'Manual knockout prediction entered by the user.',
+          factorBreakdown: [{ label: 'Manual override', impact: 1 }],
+          inputSnapshot: [
+            { label: 'Source', value: 'manual entry' },
+            { label: 'Home goals', value: match.manualHomeGoals },
+            { label: 'Away goals', value: match.manualAwayGoals },
+          ],
+          knockoutWinnerTeamId:
+            homeGoals === awayGoals
+              ? (resolvedKnockoutMatches.find((item) => item.match.id === matchId)?.homeTeam?.id ?? undefined)
+              : homeGoals > awayGoals
+                ? resolvedKnockoutMatches.find((item) => item.match.id === matchId)?.homeTeam?.id
+                : resolvedKnockoutMatches.find((item) => item.match.id === matchId)?.awayTeam?.id,
+          knockoutResolution: homeGoals === awayGoals ? 'penalties' : 'regularTime',
+          penaltyScore: homeGoals === awayGoals ? '4-3' : undefined,
+        } satisfies Prediction
 
         return {
           ...match,
           manualEditorOpen: false,
-          prediction: {
-            homeGoals,
-            awayGoals,
-            confidence: 100,
-            homeWinProbability: homeGoals > awayGoals ? 100 : 0,
-            drawProbability: 0,
-            awayWinProbability: awayGoals > homeGoals ? 100 : 0,
-            homeExpectedGoals: homeGoals,
-            awayExpectedGoals: awayGoals,
-            modelStrength: 100,
-            summary: 'Manual knockout prediction entered by the user.',
-          },
+          prediction,
+          predictionHistory: appendHistory(match.predictionHistory, {
+            action: 'manual',
+            stage: 'knockout',
+            source: 'manual',
+            summary: 'Manual knockout prediction saved.',
+            prediction,
+          }),
         }
       }),
     )
@@ -1692,9 +2456,11 @@ function App() {
     window.localStorage.removeItem(storageKeys.groupMatches)
     window.localStorage.removeItem(storageKeys.knockoutMatches)
     window.localStorage.removeItem(storageKeys.activeView)
+    window.localStorage.removeItem(storageKeys.liveTeamForm)
     setMatches(createInitialMatches())
     setKnockoutMatches(createInitialKnockoutMatches())
     setActiveView('group')
+    setLiveTeamForm({})
   }
 
   return (
@@ -1722,7 +2488,14 @@ function App() {
             <span>Next product step</span>
             <strong>Poules-style picks</strong>
           </article>
+          <article>
+            <span>Live form refresh</span>
+            <strong>{latestLiveRefresh ? new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(latestLiveRefresh)) : 'Not loaded yet'}</strong>
+          </article>
           <div className="hero-button-stack">
+            <button type="button" className="secondary-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
+              {isRefreshingLiveData ? 'Refreshing live data...' : 'Refresh live data'}
+            </button>
             <button type="button" className="secondary-button" onClick={handleReset}>
               Reset simulation
             </button>
@@ -1933,6 +2706,8 @@ function App() {
                           <p>
                             <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
                           </p>
+                          {renderPredictionExplanation(match.prediction)}
+                          {renderPredictionHistory(match.predictionHistory)}
                             </div>
                           ) : (
                           <div className="prediction-box prediction-box-muted">
@@ -2059,9 +2834,9 @@ function App() {
                     const awayTeam = resolvedMatch.awayTeam
                     const canPredict = Boolean(homeTeam && awayTeam)
                     const scoreLabel = match.acceptedPrediction
-                      ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}`
+                      ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}${match.acceptedPrediction.knockoutResolution === 'extraTime' ? ' aet' : match.acceptedPrediction.knockoutResolution === 'penalties' ? ` pens ${match.acceptedPrediction.penaltyScore}` : ''}`
                       : match.prediction
-                        ? `${match.prediction.homeGoals} : ${match.prediction.awayGoals}`
+                        ? `${match.prediction.homeGoals} : ${match.prediction.awayGoals}${match.prediction.knockoutResolution === 'extraTime' ? ' aet' : match.prediction.knockoutResolution === 'penalties' ? ` pens ${match.prediction.penaltyScore}` : ''}`
                         : 'vs'
 
                     return (
@@ -2075,6 +2850,27 @@ function App() {
                           <span>{resolvedMatch.displayHomeSlot}</span>
                           <span>{resolvedMatch.displayAwaySlot}</span>
                         </div>
+
+                        {resolvedMatch.schedule ? (
+                          <div className="schedule-box">
+                            <div>
+                              <strong>{resolvedMatch.schedule.venueCity}</strong>
+                              <span>{resolvedMatch.schedule.stadium}</span>
+                            </div>
+                            <div>
+                              <strong>Local</strong>
+                              <span>
+                                {resolvedMatch.schedule.localDateLabel} / {resolvedMatch.schedule.localTimeLabel}
+                              </span>
+                            </div>
+                            <div>
+                              <strong>Poland</strong>
+                              <span>
+                                {resolvedMatch.schedule.polishDateLabel} / {resolvedMatch.schedule.polishTimeLabel}
+                              </span>
+                            </div>
+                          </div>
+                        ) : null}
 
                         <div className="match-teams">
                           <div className="team-entry">
@@ -2120,6 +2916,8 @@ function App() {
                             <p>
                               <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
                             </p>
+                            {renderPredictionExplanation(match.prediction)}
+                            {renderPredictionHistory(match.predictionHistory)}
                           </div>
                         ) : (
                           <div className="prediction-box prediction-box-muted">
@@ -2153,7 +2951,7 @@ function App() {
                               type="button"
                               className="secondary-button"
                               onClick={() => handleSaveKnockoutManualPrediction(match.id)}
-                              disabled={match.manualHomeGoals === '' || match.manualAwayGoals === '' || match.manualHomeGoals === match.manualAwayGoals}
+                              disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
                             >
                               Save manual prediction
                             </button>
@@ -2181,7 +2979,7 @@ function App() {
                             type="button"
                             className="secondary-button"
                             onClick={() => handleAcceptKnockout(match.id)}
-                            disabled={!match.prediction || match.prediction.homeGoals === match.prediction.awayGoals}
+                            disabled={!match.prediction}
                           >
                             Accept
                           </button>
