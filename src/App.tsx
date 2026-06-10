@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import './App.css'
 import { getAnnexCAssignment } from './annexC'
 import { knockoutScheduleByMatchId, type KnockoutScheduleItem } from './knockoutSchedule'
 
-type ViewMode = 'group' | 'bracket'
+type ViewMode = 'group' | 'bracket' | 'teams'
 type StandingsMode = 'prediction' | 'real'
+type TeamSortMode = 'alphabetical' | 'ranking' | 'group'
 type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
 type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
 
@@ -24,6 +25,8 @@ type TeamRecentData = {
   cleanSheetRate: number
   injuryBurden: number
 }
+
+type Confederation = 'UEFA' | 'CONMEBOL' | 'CONCACAF' | 'AFC' | 'CAF' | 'OFC'
 
 type Team = {
   id: string
@@ -96,6 +99,63 @@ type TeamLiveForm = TeamRecentData & {
   sampleSize: number
 }
 
+type TeamStaffMember = {
+  name: string
+  role: string
+  nationality?: string
+}
+
+type TeamTournamentPlayerStats = {
+  matchesPlayed?: number | null
+  minutesPlayed?: number | null
+  goals?: number | null
+  assists?: number | null
+  fouls?: number | null
+  yellowCards?: number | null
+  redCards?: number | null
+  unavailableNextMatch?: boolean
+  injured?: boolean
+}
+
+type TeamPlayerProfile = {
+  id: string
+  name: string
+  lastName?: string
+  number?: string
+  nationality?: string
+  club?: string
+  position?: string
+  age?: number | null
+  dateOfBirth?: string
+  height?: string
+  weight?: string
+  status?: string
+  playerRating?: number | null
+  nationalTeamMatches?: number | null
+  nationalTeamGoals?: number | null
+  nationalTeamAssists?: number | null
+  nationalTeamYellowCards?: number | null
+  nationalTeamRedCards?: number | null
+  tournamentStats: TeamTournamentPlayerStats
+  thumbUrl?: string
+  cutoutUrl?: string
+}
+
+type TeamDirectoryEntry = {
+  teamId: string
+  teamName: string
+  group: string
+  source: string
+  refreshedAt: string
+  stadium?: string
+  location?: string
+  foundedYear?: string
+  website?: string
+  description?: string
+  staff: TeamStaffMember[]
+  players: TeamPlayerProfile[]
+}
+
 type BookmakerOddsSnapshot = {
   sourceKey: BookmakerSourceKey
   sourceLabel: string
@@ -161,6 +221,24 @@ type MarketApiState = {
     remaining: string | null
     used: string | null
     last: string | null
+  }
+}
+
+type LiveDataProviderState = {
+  configured: boolean
+  label: string
+  status: string
+}
+
+type LiveDataState = {
+  liveTeamFormById: Partial<Record<string, TeamLiveForm>>
+  teamDirectoryById: Partial<Record<string, TeamDirectoryEntry>>
+  latestRefreshAt?: string
+  refreshStatus: string
+  providers: {
+    apiFootball: LiveDataProviderState
+    footballData: LiveDataProviderState
+    theSportsDb: LiveDataProviderState
   }
 }
 
@@ -562,6 +640,67 @@ const teamRecentDataOverrides: Partial<Record<string, Partial<TeamRecentData>>> 
   sen: { lastFivePointsPerMatch: 1.8, goalsForPerMatch: 1.55, goalsAgainstPerMatch: 0.9, cleanSheetRate: 0.35, injuryBurden: 0.07 },
 }
 
+const confederationByTeamId: Record<string, Confederation> = {
+  mex: 'CONCACAF',
+  rsa: 'CAF',
+  kor: 'AFC',
+  cze: 'UEFA',
+  can: 'CONCACAF',
+  bih: 'UEFA',
+  qat: 'AFC',
+  sui: 'UEFA',
+  bra: 'CONMEBOL',
+  mar: 'CAF',
+  hai: 'CONCACAF',
+  sco: 'UEFA',
+  usa: 'CONCACAF',
+  par: 'CONMEBOL',
+  aus: 'AFC',
+  tur: 'UEFA',
+  ger: 'UEFA',
+  cuw: 'CONCACAF',
+  civ: 'CAF',
+  ecu: 'CONMEBOL',
+  ned: 'UEFA',
+  jpn: 'AFC',
+  swe: 'UEFA',
+  tun: 'CAF',
+  bel: 'UEFA',
+  egy: 'CAF',
+  irn: 'AFC',
+  nzl: 'OFC',
+  esp: 'UEFA',
+  cpv: 'CAF',
+  ksa: 'AFC',
+  uru: 'CONMEBOL',
+  fra: 'UEFA',
+  sen: 'CAF',
+  irq: 'AFC',
+  nor: 'UEFA',
+  arg: 'CONMEBOL',
+  alg: 'CAF',
+  aut: 'UEFA',
+  jor: 'AFC',
+  por: 'UEFA',
+  cod: 'CAF',
+  uzb: 'AFC',
+  col: 'CONMEBOL',
+  eng: 'UEFA',
+  cro: 'UEFA',
+  gha: 'CAF',
+  pan: 'CONCACAF',
+}
+
+const notablePairBiasOverrides: Record<string, { favoredTeamId?: string; edge?: number; drawLean?: number }> = {
+  'arg-bra': { drawLean: 0.015 },
+  'eng-sco': { drawLean: 0.018 },
+  'cro-eng': { drawLean: 0.012 },
+  'mex-usa': { drawLean: 0.014 },
+  'arg-uru': { drawLean: 0.016 },
+  'por-esp': { drawLean: 0.012 },
+  'aut-ger': { favoredTeamId: 'ger', edge: 0.012, drawLean: 0.01 },
+}
+
 const fixedRoundOf32Rules = [
   ['73', '2A', '2B'],
   ['75', '1F', '2C'],
@@ -617,7 +756,10 @@ const storageKeys = {
   activeView: 'world-cup-betting-system/active-view',
   standingsMode: 'world-cup-betting-system/standings-mode',
   liveTeamForm: 'world-cup-betting-system/live-team-form',
+  teamDirectory: 'world-cup-betting-system/team-directory',
 } as const
+
+const TEAM_DATA_STALE_AFTER_MS = 1000 * 60 * 60 * 12
 
 const bookmakerSources: BookmakerSourceDefinition[] = [
   { key: 'betfair', label: 'Betfair Exchange', shortLabel: 'BF', accent: '#f59e0b', featured: true },
@@ -647,7 +789,31 @@ const defaultMarketApiState: MarketApiState = {
 const defaultRefreshFeedback: RefreshFeedback = {
   kind: 'idle',
   title: 'No refresh is running right now.',
-  details: ['Use `Refresh live data & odds` to update team form and backend market odds.'],
+  details: ['Use `Refresh Live Data` for team data and `Refresh Bets` for bookmaker odds and results.'],
+}
+
+const defaultLiveDataState: LiveDataState = {
+  liveTeamFormById: {},
+  teamDirectoryById: {},
+  latestRefreshAt: undefined,
+  refreshStatus: 'Refresh Live Data will load team data through backend providers.',
+  providers: {
+    apiFootball: {
+      configured: false,
+      label: 'API-Football',
+      status: 'API-Football key missing.',
+    },
+    footballData: {
+      configured: false,
+      label: 'football-data.org',
+      status: 'football-data.org key missing.',
+    },
+    theSportsDb: {
+      configured: true,
+      label: 'TheSportsDB',
+      status: 'TheSportsDB fallback is available.',
+    },
+  },
 }
 
 function normalizeMarketApiState(state: Partial<MarketApiState>): MarketApiState {
@@ -664,22 +830,6 @@ function normalizeMarketApiState(state: Partial<MarketApiState>): MarketApiState
     actualResultsByMatchId: state.actualResultsByMatchId ?? {},
     trustedSources: state.trustedSources ?? defaultMarketApiState.trustedSources,
   }
-}
-
-const liveSearchTeamNames: Partial<Record<string, string>> = {
-  usa: 'United States',
-  kor: 'South Korea',
-  cze: 'Czech Republic',
-  bih: 'Bosnia and Herzegovina',
-  sco: 'Scotland',
-  tur: 'Turkiye',
-  cuw: 'Curacao',
-  civ: "Ivory Coast",
-  cpv: 'Cape Verde',
-  irq: 'Iraq',
-  alg: 'Algeria',
-  cod: 'DR Congo',
-  eng: 'England',
 }
 
 function findBookmakerSource(sourceKey: BookmakerSourceKey) {
@@ -1113,85 +1263,6 @@ function getTeamRecentData(team: Team, liveTeamForm?: Partial<Record<string, Tea
   }
 }
 
-async function fetchLiveTeamForm(team: Team): Promise<TeamLiveForm | null> {
-  const searchName = liveSearchTeamNames[team.id] ?? team.name
-  const teamResponse = await fetch(`https://www.thesportsdb.com/api/v1/json/123/searchteams.php?t=${encodeURIComponent(searchName)}`)
-
-  if (!teamResponse.ok) {
-    return null
-  }
-
-  const teamPayload = (await teamResponse.json()) as { teams?: Array<{ idTeam?: string; strTeam?: string; strSport?: string }> }
-  const selectedTeam = teamPayload.teams?.find((candidate) => candidate.strSport === 'Soccer' && candidate.idTeam)
-
-  if (!selectedTeam?.idTeam) {
-    return null
-  }
-
-  const lastEventsResponse = await fetch(`https://www.thesportsdb.com/api/v1/json/123/eventslast.php?id=${selectedTeam.idTeam}`)
-
-  if (!lastEventsResponse.ok) {
-    return null
-  }
-
-  const lastEventsPayload = (await lastEventsResponse.json()) as {
-    results?: Array<{
-      strHomeTeam?: string
-      strAwayTeam?: string
-      intHomeScore?: string
-      intAwayScore?: string
-      strStatus?: string
-    }>
-  }
-  const results = (lastEventsPayload.results ?? [])
-    .filter((event) => event.strStatus === 'Match Finished' || event.intHomeScore !== undefined)
-    .slice(0, 5)
-
-  if (results.length === 0) {
-    return null
-  }
-
-  let points = 0
-  let goalsFor = 0
-  let goalsAgainst = 0
-  let cleanSheets = 0
-
-  results.forEach((event) => {
-    const homeGoals = Number(event.intHomeScore ?? 0)
-    const awayGoals = Number(event.intAwayScore ?? 0)
-    const isHome = event.strHomeTeam?.toLowerCase() === (selectedTeam.strTeam ?? searchName).toLowerCase()
-    const teamGoals = isHome ? homeGoals : awayGoals
-    const opponentGoals = isHome ? awayGoals : homeGoals
-
-    goalsFor += teamGoals
-    goalsAgainst += opponentGoals
-
-    if (opponentGoals === 0) {
-      cleanSheets += 1
-    }
-
-    if (teamGoals > opponentGoals) {
-      points += 3
-    } else if (teamGoals === opponentGoals) {
-      points += 1
-    }
-  })
-
-  const sampleSize = results.length
-  const ratingInjuryBaseline = teamRecentDataOverrides[team.id]?.injuryBurden ?? clamp(0.05 + (5 - sampleSize) * 0.01, 0.04, 0.12)
-
-  return {
-    lastFivePointsPerMatch: roundTo(points / sampleSize, 2),
-    goalsForPerMatch: roundTo(goalsFor / sampleSize, 2),
-    goalsAgainstPerMatch: roundTo(goalsAgainst / sampleSize, 2),
-    cleanSheetRate: roundTo(cleanSheets / sampleSize, 2),
-    injuryBurden: ratingInjuryBaseline,
-    source: 'TheSportsDB recent team results',
-    refreshedAt: new Date().toISOString(),
-    sampleSize,
-  }
-}
-
 async function fetchMarketStateFromBackend() {
   const response = await fetch('/api/market/state')
 
@@ -1293,6 +1364,77 @@ async function resetMarketStateInBackend() {
   return normalizeMarketApiState((await response.json()) as Partial<MarketApiState>)
 }
 
+function normalizeLiveDataState(state: Partial<LiveDataState>): LiveDataState {
+  return {
+    ...defaultLiveDataState,
+    ...state,
+    liveTeamFormById: state.liveTeamFormById ?? defaultLiveDataState.liveTeamFormById,
+    teamDirectoryById: state.teamDirectoryById ?? defaultLiveDataState.teamDirectoryById,
+    providers: {
+      apiFootball: { ...defaultLiveDataState.providers.apiFootball, ...(state.providers?.apiFootball ?? {}) },
+      footballData: { ...defaultLiveDataState.providers.footballData, ...(state.providers?.footballData ?? {}) },
+      theSportsDb: { ...defaultLiveDataState.providers.theSportsDb, ...(state.providers?.theSportsDb ?? {}) },
+    },
+  }
+}
+
+async function fetchLiveDataStateFromBackend() {
+  const response = await fetch('/api/live/state')
+
+  if (!response.ok) {
+    throw new Error(`Live data state request failed with ${response.status}.`)
+  }
+
+  return normalizeLiveDataState((await response.json()) as Partial<LiveDataState>)
+}
+
+async function refreshLiveDataInBackend(teams: Team[]) {
+  const response = await fetch('/api/live/refresh', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ teams }),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null
+    throw new Error(payload?.message ?? `Live data refresh failed with ${response.status}.`)
+  }
+
+  return normalizeLiveDataState((await response.json()) as Partial<LiveDataState>)
+}
+
+async function submitLiveProviderKeyToBackend(providerKey: 'api-football' | 'football-data', apiKey: string) {
+  const response = await fetch(`/api/live/provider/${providerKey}/api-key`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ apiKey }),
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null
+    throw new Error(payload?.message ?? `Live provider key submit failed with ${response.status}.`)
+  }
+
+  return normalizeLiveDataState((await response.json()) as Partial<LiveDataState>)
+}
+
+async function resetLiveDataInBackend() {
+  const response = await fetch('/api/live/reset', {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null
+    throw new Error(payload?.message ?? `Live data reset failed with ${response.status}.`)
+  }
+
+  return normalizeLiveDataState((await response.json()) as Partial<LiveDataState>)
+}
+
 
 function calculateDistanceKm(fromLatitude: number, fromLongitude: number, toLatitude: number, toLongitude: number) {
   const earthRadiusKm = 6371
@@ -1372,6 +1514,222 @@ function getFormFactor(team: Team, attempt: number) {
   return formSeed * 0.025
 }
 
+function average(values: number[]) {
+  if (values.length === 0) {
+    return 0
+  }
+
+  return values.reduce((sum, value) => sum + value, 0) / values.length
+}
+
+function getConfederation(team: Team): Confederation {
+  return confederationByTeamId[team.id] ?? 'UEFA'
+}
+
+function getHeadCoachName(entry?: TeamDirectoryEntry) {
+  const coach = entry?.staff.find((member) => /head coach|manager|coach/i.test(member.role))
+  return coach?.name
+}
+
+function getPlayerProjectedRating(player: TeamPlayerProfile) {
+  if (typeof player.playerRating === 'number') {
+    return clamp(player.playerRating, 45, 99)
+  }
+
+  const tournamentContribution =
+    (player.tournamentStats.minutesPlayed ?? 0) / 90 * 1.2 +
+    (player.tournamentStats.goals ?? 0) * 2.8 +
+    (player.tournamentStats.assists ?? 0) * 1.9
+  const nationalTeamContribution =
+    (player.nationalTeamMatches ?? 0) * 0.12 +
+    (player.nationalTeamGoals ?? 0) * 0.38 +
+    (player.nationalTeamAssists ?? 0) * 0.28
+  const ageAdjustment = player.age ? clamp((29 - Math.abs(player.age - 27)) * 0.45, -4, 5) : 0
+
+  return clamp(58 + tournamentContribution + nationalTeamContribution + ageAdjustment, 50, 92)
+}
+
+function getPlayerRoleBucket(player: TeamPlayerProfile) {
+  const normalizedPosition = (player.position ?? '').toLowerCase()
+
+  if (normalizedPosition.includes('goal')) {
+    return 'goalkeeper'
+  }
+
+  if (normalizedPosition.includes('def')) {
+    return 'defender'
+  }
+
+  if (normalizedPosition.includes('mid')) {
+    return 'midfielder'
+  }
+
+  if (normalizedPosition.includes('wing') || normalizedPosition.includes('for') || normalizedPosition.includes('strik') || normalizedPosition.includes('att')) {
+    return 'forward'
+  }
+
+  return 'outfield'
+}
+
+function getPlayerImportanceScore(player: TeamPlayerProfile) {
+  const rating = getPlayerProjectedRating(player)
+  const roleBucket = getPlayerRoleBucket(player)
+  const roleMultiplier =
+    roleBucket === 'goalkeeper'
+      ? 1.08
+      : roleBucket === 'midfielder'
+        ? 1.03
+        : roleBucket === 'forward'
+          ? 1.06
+          : 1
+  const experienceWeight = clamp((player.nationalTeamMatches ?? 0) / 55, 0, 1)
+  const scoringWeight = clamp(((player.nationalTeamGoals ?? 0) + (player.nationalTeamAssists ?? 0)) / 28, 0, 1)
+  const tournamentWeight = clamp((player.tournamentStats.minutesPlayed ?? 0) / 270, 0, 1)
+
+  return clamp((rating / 100) * 0.72 * roleMultiplier + experienceWeight * 0.14 + scoringWeight * 0.08 + tournamentWeight * 0.12, 0.35, 1.55)
+}
+
+function getTeamSquadSignals(team: Team, entry?: TeamDirectoryEntry) {
+  const players = entry?.players ?? []
+
+  if (players.length === 0) {
+    return {
+      depthScore: clamp(0.64 + (team.rating - 70) / 90, 0.58, 0.92),
+      extraTimeDepthScore: clamp(0.62 + (team.rating - 70) / 95, 0.56, 0.9),
+      penaltyUnitScore: clamp(0.6 + (team.rating - 70) / 92, 0.56, 0.9),
+      goalkeeperScore: clamp(0.6 + (team.rating - 70) / 96, 0.55, 0.88),
+      availabilityImpact: 0,
+      disciplineRisk: 0,
+      injuredCount: 0,
+      unavailableCount: 0,
+      coreContinuityScore: clamp(0.54 + (team.rating - 70) / 115, 0.48, 0.82),
+      starAbsenceNames: [] as string[],
+    }
+  }
+
+  const ratedPlayers = players
+    .map((player) => ({ player, rating: getPlayerProjectedRating(player), importance: getPlayerImportanceScore(player) }))
+    .sort((left, right) => right.rating - left.rating)
+  const topCore = ratedPlayers.slice(0, 11)
+  const benchCore = ratedPlayers.slice(11, 22)
+  const penaltyPool = ratedPlayers.filter(({ player }) => ['forward', 'midfielder', 'outfield'].includes(getPlayerRoleBucket(player))).slice(0, 6)
+  const goalkeepers = ratedPlayers.filter(({ player }) => getPlayerRoleBucket(player) === 'goalkeeper')
+  const unavailablePlayers = ratedPlayers.filter(({ player }) => player.tournamentStats.injured || player.tournamentStats.unavailableNextMatch)
+  const starAbsences = unavailablePlayers.slice(0, 4)
+  const availabilityImpact = clamp(
+    starAbsences.reduce(
+      (sum, { player, importance }) =>
+        sum +
+        importance *
+          (player.tournamentStats.injured ? 0.08 : 0.05),
+      0,
+    ),
+    0,
+    0.24,
+  )
+  const disciplineRisk = clamp(
+    average(
+      ratedPlayers.slice(0, 14).map(
+        ({ player }) => (player.tournamentStats.yellowCards ?? 0) * 0.035 + (player.tournamentStats.redCards ?? 0) * 0.09,
+      ),
+    ),
+    0,
+    0.2,
+  )
+  const coreContinuityScore = clamp(
+    average(topCore.map(({ player }) => clamp((player.nationalTeamMatches ?? 0) / 70, 0.15, 1))) * 0.72 +
+      clamp(1 - availabilityImpact * 1.8, 0.5, 1) * 0.28,
+    0.35,
+    0.95,
+  )
+
+  return {
+    depthScore: clamp(average(ratedPlayers.slice(0, 18).map(({ rating }) => rating)) / 100, 0.55, 0.96),
+    extraTimeDepthScore: clamp((average(benchCore.map(({ rating }) => rating)) * 0.55 + average(topCore.map(({ rating }) => rating)) * 0.45) / 100, 0.52, 0.98),
+    penaltyUnitScore: clamp((average(penaltyPool.map(({ rating }) => rating)) || average(topCore.map(({ rating }) => rating))) / 100, 0.5, 0.99),
+    goalkeeperScore: clamp(((goalkeepers[0]?.rating ?? average(topCore.map(({ rating }) => rating)) * 0.94) as number) / 100, 0.5, 0.97),
+    availabilityImpact,
+    disciplineRisk,
+    injuredCount: ratedPlayers.filter(({ player }) => player.tournamentStats.injured).length,
+    unavailableCount: ratedPlayers.filter(({ player }) => player.tournamentStats.unavailableNextMatch).length,
+    coreContinuityScore,
+    starAbsenceNames: starAbsences.map(({ player }) => player.name),
+  }
+}
+
+function getTeamContinuitySignals(team: Team, profile: TeamModelProfile, squadSignals: ReturnType<typeof getTeamSquadSignals>, entry?: TeamDirectoryEntry) {
+  const coachName = getHeadCoachName(entry)
+  const rosterCompleteness = clamp((entry?.players.length ?? 0) / 26, 0.32, 1)
+  const staffCompleteness = clamp((entry?.staff.length ?? 0) / 4, 0.2, 1)
+  const seededCoachTenureMonths = clamp(8 + ((teamHash(team) * 7) % 38), 6, 46)
+  const coachTenureMonths = coachName ? seededCoachTenureMonths + 4 : seededCoachTenureMonths - 2
+  const tacticalContinuity = clamp(
+    0.44 +
+      rosterCompleteness * 0.12 +
+      staffCompleteness * 0.05 +
+      squadSignals.coreContinuityScore * 0.22 +
+      (1.06 - profile.volatility) * 0.26 +
+      clamp((coachTenureMonths - 12) / 95, -0.06, 0.14),
+    0.34,
+    0.92,
+  )
+  const recentCoachChangeRisk = coachTenureMonths <= 10 ? clamp((11 - coachTenureMonths) * 0.011, 0.01, 0.08) : 0
+  const stabilityScore = clamp(
+    tacticalContinuity * 0.7 +
+      clamp(coachTenureMonths / 42, 0.16, 1) * 0.16 +
+      staffCompleteness * 0.07 -
+      recentCoachChangeRisk -
+      squadSignals.availabilityImpact * 0.35,
+    0.24,
+    0.93,
+  )
+
+  return {
+    coachName,
+    coachTenureMonths,
+    tacticalContinuity,
+    recentCoachChangeRisk,
+    stabilityScore,
+  }
+}
+
+function getMatchupHistorySignals(homeTeam: Team, awayTeam: Team, homeRecent: TeamRecentData, awayRecent: TeamRecentData) {
+  const homeConfederation = getConfederation(homeTeam)
+  const awayConfederation = getConfederation(awayTeam)
+  const sameConfederation = homeConfederation === awayConfederation
+  const similarTier = Math.abs(homeTeam.rating - awayTeam.rating) <= 6
+  const pairKey = [homeTeam.id, awayTeam.id].sort().join('-')
+  const pairOverride = notablePairBiasOverrides[pairKey]
+  const seededHeadToHeadEdge = pairOverride?.favoredTeamId
+    ? pairOverride.favoredTeamId === homeTeam.id
+      ? pairOverride.edge ?? 0
+      : -(pairOverride.edge ?? 0)
+    : 0
+  const peerPerformanceEdge =
+    sameConfederation && similarTier
+      ? clamp(
+          (homeRecent.lastFivePointsPerMatch - awayRecent.lastFivePointsPerMatch) * 0.028 +
+            (homeRecent.goalsForPerMatch - awayRecent.goalsForPerMatch) * 0.018 +
+            (awayRecent.goalsAgainstPerMatch - homeRecent.goalsAgainstPerMatch) * 0.014,
+          -0.09,
+          0.09,
+        )
+      : 0
+  const regionalFamiliarityDrawLean = sameConfederation ? 0.01 : 0
+  const similarTierDrawLean = similarTier ? 0.006 : 0
+  const drawLean = clamp(regionalFamiliarityDrawLean + similarTierDrawLean + (pairOverride?.drawLean ?? 0), -0.02, 0.045)
+
+  return {
+    sameConfederation,
+    similarTier,
+    homeConfederation,
+    awayConfederation,
+    seededHeadToHeadEdge,
+    peerPerformanceEdge,
+    drawLean,
+  }
+}
+
 function getHostVenueBoost(team: Team, venueCity: string) {
   const venueMeta = venueMetaByCity[venueCity]
 
@@ -1427,6 +1785,7 @@ function predictMatch(
   attempt = 0,
   context?: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'>,
   liveTeamForm?: Partial<Record<string, TeamLiveForm>>,
+  teamDirectory?: Partial<Record<string, TeamDirectoryEntry>>,
   options?: { knockout?: boolean; groupState?: GroupStateContext; marketSignal?: MarketConsensusSnapshot },
 ): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
@@ -1440,6 +1799,13 @@ function predictMatch(
   const awayRecent = getTeamRecentData(awayTeam, liveTeamForm)
   const homeLiveSource = liveTeamForm?.[homeTeam.id]
   const awayLiveSource = liveTeamForm?.[awayTeam.id]
+  const homeDirectoryEntry = teamDirectory?.[homeTeam.id]
+  const awayDirectoryEntry = teamDirectory?.[awayTeam.id]
+  const homeSquadSignals = getTeamSquadSignals(homeTeam, homeDirectoryEntry)
+  const awaySquadSignals = getTeamSquadSignals(awayTeam, awayDirectoryEntry)
+  const homeContinuitySignals = getTeamContinuitySignals(homeTeam, homeProfile, homeSquadSignals, homeDirectoryEntry)
+  const awayContinuitySignals = getTeamContinuitySignals(awayTeam, awayProfile, awaySquadSignals, awayDirectoryEntry)
+  const matchupHistorySignals = getMatchupHistorySignals(homeTeam, awayTeam, homeRecent, awayRecent)
   const formSwing = getFormFactor(homeTeam, attempt) - getFormFactor(awayTeam, attempt)
   const homeHostBoost = getHostVenueBoost(homeTeam, venueCity)
   const awayHostBoost = getHostVenueBoost(awayTeam, venueCity)
@@ -1460,6 +1826,13 @@ function predictMatch(
   const rotationSwing = (options?.groupState?.awayRotationRisk ?? 0) - (options?.groupState?.homeRotationRisk ?? 0)
   const motivationSwing = (options?.groupState?.homeMotivationBoost ?? 0) - (options?.groupState?.awayMotivationBoost ?? 0)
   const drawToleranceSwing = options?.groupState?.drawToleranceSwing ?? 0
+  const availabilitySwing = awaySquadSignals.availabilityImpact - homeSquadSignals.availabilityImpact
+  const continuitySwing = (homeContinuitySignals.stabilityScore - awayContinuitySignals.stabilityScore) * 0.18
+  const tacticalSwing = (homeContinuitySignals.tacticalContinuity - awayContinuitySignals.tacticalContinuity) * 0.12
+  const headToHeadSwing = matchupHistorySignals.seededHeadToHeadEdge
+  const peerOppositionSwing = matchupHistorySignals.peerPerformanceEdge
+  const depthSwing = (homeSquadSignals.depthScore - awaySquadSignals.depthScore) * 0.08
+  const disciplineSwing = (awaySquadSignals.disciplineRisk - homeSquadSignals.disciplineRisk) * 0.08
   const homeExpectedGoals = clamp(
     1.18 +
       homeAttack * 0.62 -
@@ -1471,10 +1844,17 @@ function predictMatch(
       defensiveRecordSwing +
       cleanSheetSwing +
       injurySwing +
+      availabilitySwing +
       restSwing +
       travelSwing +
       rotationSwing +
       motivationSwing +
+      continuitySwing +
+      tacticalSwing +
+      headToHeadSwing +
+      peerOppositionSwing +
+      depthSwing +
+      disciplineSwing +
       creationSwing * 0.18 +
       finishingSwing * 0.12 +
       setPieceSwing * 0.08 +
@@ -1497,10 +1877,17 @@ function predictMatch(
       defensiveRecordSwing * -0.85 +
       cleanSheetSwing * -0.9 +
       injurySwing * -0.95 +
+      availabilitySwing * -0.92 +
       restSwing * -0.95 +
       travelSwing * -0.95 +
       rotationSwing * -0.95 +
       motivationSwing * -0.95 +
+      continuitySwing * -0.9 +
+      tacticalSwing * -0.88 +
+      headToHeadSwing * -0.85 +
+      peerOppositionSwing * -0.88 +
+      depthSwing * -0.82 +
+      disciplineSwing * -0.9 +
       (awayProfile.chanceCreation - homeProfile.chanceCreation) * 0.17 +
       (awayProfile.finishing - homeProfile.finishing) * 0.12 +
       (awayProfile.setPieces - homeProfile.setPieces) * 0.08 +
@@ -1519,7 +1906,7 @@ function predictMatch(
   let bestScoreProbability = -1
   let homeGoals = 0
   let awayGoals = 0
-  const drawBiasMultiplier = clamp(1 + drawToleranceSwing * 4.5, 0.78, 1.26)
+  const drawBiasMultiplier = clamp(1 + drawToleranceSwing * 4.5 + matchupHistorySignals.drawLean, 0.78, 1.3)
   const decisiveBiasMultiplier = clamp(1 - drawToleranceSwing * 2.1, 0.88, 1.12)
 
   for (let homeGoalCount = 0; homeGoalCount <= 6; homeGoalCount += 1) {
@@ -1581,6 +1968,7 @@ function predictMatch(
         Math.max(finalHomeWinPercent, finalDrawPercent, finalAwayWinPercent) +
         Math.abs(drawToleranceSwing) * 18 +
         Math.abs(motivationSwing) * 12 +
+        Math.abs(availabilitySwing + continuitySwing + headToHeadSwing + peerOppositionSwing) * 22 +
         (marketSignal ? 5 : 0),
     ),
     40,
@@ -1592,7 +1980,20 @@ function predictMatch(
         Math.abs(ratingGap) * 0.45 +
         Math.abs(creationSwing + finishingSwing + defensiveSwing + experienceSwing) * 14 +
         Math.abs(homeHostBoost - awayHostBoost) * 20 +
-        Math.abs(recentFormSwing + scoringSwing + injurySwing + restSwing + travelSwing + rotationSwing + motivationSwing) * 18,
+        Math.abs(
+          recentFormSwing +
+            scoringSwing +
+            injurySwing +
+            availabilitySwing +
+            restSwing +
+            travelSwing +
+            rotationSwing +
+            motivationSwing +
+            continuitySwing +
+            tacticalSwing +
+            headToHeadSwing +
+            peerOppositionSwing,
+        ) * 18,
     ),
     50,
     94,
@@ -1621,6 +2022,18 @@ function predictMatch(
   const groupStateSummary = options?.groupState
     ? 'The group-state layer considers points, table position, likely rotation and whether a draw may already suit one side.'
     : 'The group-state layer is not active for this match.'
+  const squadContextSummary =
+    homeDirectoryEntry || awayDirectoryEntry
+      ? 'Squad depth, key absences, goalkeeper quality and likely penalty taker strength are also blended in from the roster layer.'
+      : 'No enriched roster snapshot is active, so squad-level absence and depth effects stay mostly neutral.'
+  const continuityContextSummary =
+    homeContinuitySignals.coachName || awayContinuitySignals.coachName
+      ? 'Coach continuity, tactical stability and core-squad continuity are included as an extra medium-term context layer.'
+      : 'Coach and tactical continuity are estimated from roster stability because no named coach snapshot is currently loaded.'
+  const matchupContextSummary =
+    matchupHistorySignals.sameConfederation || matchupHistorySignals.similarTier
+      ? 'The matchup layer also accounts for same-continent familiarity and how each team profiles against peers from a similar level.'
+      : 'No strong regional familiarity or similar-tier matchup signal was detected for this pairing.'
   const marketContextSummary = marketSignal
     ? `${marketSignal.sourceLabel} odds are blended into the model as an additional market signal from the backend market consensus layer.`
     : 'No bookmaker market feed is blended into this run.'
@@ -1629,10 +2042,14 @@ function predictMatch(
     { label: 'Team profile edge', impact: creationSwing * 0.18 + finishingSwing * 0.12 + setPieceSwing * 0.08 + experienceSwing * 0.05 },
     { label: 'Recent form edge', impact: recentFormSwing + scoringSwing + defensiveRecordSwing + cleanSheetSwing },
     { label: 'Injury edge', impact: injurySwing },
+    { label: 'Key absences edge', impact: availabilitySwing },
     { label: 'Rest edge', impact: restSwing },
     { label: 'Travel edge', impact: travelSwing },
     { label: 'Rotation risk edge', impact: rotationSwing },
     { label: 'Motivation edge', impact: motivationSwing },
+    { label: 'Coach continuity edge', impact: continuitySwing + tacticalSwing },
+    { label: 'Matchup history edge', impact: headToHeadSwing + peerOppositionSwing },
+    { label: 'Squad depth edge', impact: depthSwing + disciplineSwing },
     { label: 'Draw tolerance swing', impact: drawToleranceSwing },
     { label: 'Market odds edge', impact: marketSignal ? (marketSignal.homeProbability - marketSignal.awayProbability) / 100 : 0 },
     { label: 'Venue and altitude edge', impact: homeHostBoost - awayHostBoost * 0.4 + homeAltitudeAdjustment - awayAltitudeAdjustment * 0.35 },
@@ -1654,6 +2071,34 @@ function predictMatch(
     { label: 'Goals against per match', value: `${roundTo(homeRecent.goalsAgainstPerMatch, 2)} vs ${roundTo(awayRecent.goalsAgainstPerMatch, 2)}` },
     { label: 'Injury burden', value: `${roundTo(homeRecent.injuryBurden, 2)} vs ${roundTo(awayRecent.injuryBurden, 2)}` },
     {
+      label: 'Key absences',
+      value: `${homeSquadSignals.injuredCount + homeSquadSignals.unavailableCount} vs ${awaySquadSignals.injuredCount + awaySquadSignals.unavailableCount}`,
+    },
+    {
+      label: 'Absent core names',
+      value: `${homeSquadSignals.starAbsenceNames.slice(0, 2).join(', ') || 'none'} vs ${awaySquadSignals.starAbsenceNames.slice(0, 2).join(', ') || 'none'}`,
+    },
+    {
+      label: 'Squad depth',
+      value: `${roundTo(homeSquadSignals.depthScore, 2)} vs ${roundTo(awaySquadSignals.depthScore, 2)}`,
+    },
+    {
+      label: 'Penalty unit / goalkeeper',
+      value: `${roundTo(homeSquadSignals.penaltyUnitScore, 2)} / ${roundTo(homeSquadSignals.goalkeeperScore, 2)} vs ${roundTo(awaySquadSignals.penaltyUnitScore, 2)} / ${roundTo(awaySquadSignals.goalkeeperScore, 2)}`,
+    },
+    {
+      label: 'Head coach',
+      value: `${homeContinuitySignals.coachName ?? 'not loaded'} vs ${awayContinuitySignals.coachName ?? 'not loaded'}`,
+    },
+    {
+      label: 'Coach tenure / tactical continuity',
+      value: `${homeContinuitySignals.coachTenureMonths}m / ${roundTo(homeContinuitySignals.tacticalContinuity, 2)} vs ${awayContinuitySignals.coachTenureMonths}m / ${roundTo(awayContinuitySignals.tacticalContinuity, 2)}`,
+    },
+    {
+      label: 'Confederation / peer context',
+      value: `${matchupHistorySignals.homeConfederation} vs ${matchupHistorySignals.awayConfederation}${matchupHistorySignals.similarTier ? ' | similar-tier matchup' : ''}`,
+    },
+    {
       label: 'Market source',
       value: marketSignal ? `${marketSignal.sourceLabel} (${marketSignal.homeProbability}% / ${marketSignal.drawProbability}% / ${marketSignal.awayProbability}%)` : 'not applied',
     },
@@ -1673,8 +2118,28 @@ function predictMatch(
       knockoutWinnerTeamId = homeGoals > awayGoals ? homeTeam.id : awayTeam.id
       knockoutResolution = 'regularTime'
     } else {
-      const extraTimeHomeExpectedGoals = clamp(homeExpectedGoals * 0.32 + experienceSwing * 0.05 + restSwing * 0.4 + travelSwing * 0.25, 0.08, 1.2)
-      const extraTimeAwayExpectedGoals = clamp(awayExpectedGoals * 0.32 - experienceSwing * 0.05 - restSwing * 0.35 - travelSwing * 0.25, 0.08, 1.2)
+      const extraTimeHomeExpectedGoals = clamp(
+        homeExpectedGoals * 0.32 +
+          experienceSwing * 0.05 +
+          restSwing * 0.4 +
+          travelSwing * 0.25 +
+          (homeSquadSignals.extraTimeDepthScore - awaySquadSignals.extraTimeDepthScore) * 0.42 +
+          continuitySwing * 0.28 +
+          availabilitySwing * 0.2,
+        0.08,
+        1.25,
+      )
+      const extraTimeAwayExpectedGoals = clamp(
+        awayExpectedGoals * 0.32 -
+          experienceSwing * 0.05 -
+          restSwing * 0.35 -
+          travelSwing * 0.25 -
+          (homeSquadSignals.extraTimeDepthScore - awaySquadSignals.extraTimeDepthScore) * 0.39 -
+          continuitySwing * 0.24 -
+          availabilitySwing * 0.18,
+        0.08,
+        1.25,
+      )
       let extraTimeBestProbability = -1
       let extraTimeHomeGoals = 0
       let extraTimeAwayGoals = 0
@@ -1699,7 +2164,13 @@ function predictMatch(
         }
       }
 
-      if (extraTimeHomeGoals !== extraTimeAwayGoals && extraTimeDrawProbability <= 0.62) {
+      const extraTimeResolutionThreshold = clamp(
+        0.62 - (homeSquadSignals.extraTimeDepthScore - awaySquadSignals.extraTimeDepthScore) * 0.22 - Math.abs(availabilitySwing) * 0.12,
+        0.44,
+        0.7,
+      )
+
+      if (extraTimeHomeGoals !== extraTimeAwayGoals && extraTimeDrawProbability <= extraTimeResolutionThreshold) {
         homeGoals += extraTimeHomeGoals
         awayGoals += extraTimeAwayGoals
         knockoutWinnerTeamId = homeGoals > awayGoals ? homeTeam.id : awayTeam.id
@@ -1710,11 +2181,17 @@ function predictMatch(
           finishingSwing * 0.55 +
           injurySwing * 0.25 +
           restSwing * 0.35 +
+          availabilitySwing * 0.42 +
+          (homeSquadSignals.penaltyUnitScore - awaySquadSignals.penaltyUnitScore) * 0.95 +
+          (homeSquadSignals.goalkeeperScore - awaySquadSignals.goalkeeperScore) * 0.75 +
+          (homeContinuitySignals.stabilityScore - awayContinuitySignals.stabilityScore) * 0.28 +
           (getFormFactor(homeTeam, attempt + 3) - getFormFactor(awayTeam, attempt + 3)) * 0.4
         const homePenaltyWins = penaltyEdge >= 0
+        const penaltyMargin = Math.abs(penaltyEdge)
         knockoutWinnerTeamId = homePenaltyWins ? homeTeam.id : awayTeam.id
         knockoutResolution = 'penalties'
-        penaltyScore = homePenaltyWins ? '4-3' : '3-4'
+        penaltyScore =
+          penaltyMargin >= 0.32 ? (homePenaltyWins ? '5-3' : '3-5') : penaltyMargin >= 0.16 ? (homePenaltyWins ? '4-2' : '2-4') : homePenaltyWins ? '4-3' : '3-4'
       }
     }
   }
@@ -1737,8 +2214,8 @@ function predictMatch(
     penaltyScore,
     summary:
       attempt > 0
-        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary} ${marketContextSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`
-        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary} ${marketContextSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`,
+        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary} ${squadContextSummary} ${continuityContextSummary} ${matchupContextSummary} ${marketContextSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`
+        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary} ${squadContextSummary} ${continuityContextSummary} ${matchupContextSummary} ${marketContextSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`,
   }
 }
 
@@ -2507,6 +2984,54 @@ function renderPredictionHistory(history: PredictionHistoryEntry[] | undefined) 
   )
 }
 
+function formatNullableStat(value?: string | number | null) {
+  if (value === undefined || value === null || value === '') {
+    return 'No data yet'
+  }
+
+  return String(value)
+}
+
+function formatOptionalDate(dateValue?: string) {
+  if (!dateValue) {
+    return 'No data yet'
+  }
+
+  const parsedDate = new Date(dateValue)
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return dateValue
+  }
+
+  return new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium' }).format(parsedDate)
+}
+
+function isSnapshotStale(refreshedAt?: string, maxAgeMs = TEAM_DATA_STALE_AFTER_MS) {
+  if (!refreshedAt) {
+    return true
+  }
+
+  const timestamp = new Date(refreshedAt).getTime()
+
+  if (Number.isNaN(timestamp)) {
+    return true
+  }
+
+  return Date.now() - timestamp > maxAgeMs
+}
+
+function hasCompleteRoster(entry?: TeamDirectoryEntry) {
+  return (entry?.players.length ?? 0) >= 23
+}
+
+function shouldRetryPartialRoster(entry: TeamDirectoryEntry | undefined, liveDataState: LiveDataState) {
+  if (!entry || hasCompleteRoster(entry)) {
+    return false
+  }
+
+  return liveDataState.providers.apiFootball.configured || liveDataState.providers.footballData.configured
+}
+
 function App() {
   const [matches, setMatches] = useState<Match[]>(() => mergeStoredGroupMatches(loadStoredState<Match[]>(storageKeys.groupMatches)))
   const [knockoutMatches, setKnockoutMatches] = useState<KnockoutMatch[]>(() =>
@@ -2514,20 +3039,32 @@ function App() {
   )
   const [activeView, setActiveView] = useState<ViewMode>(() => loadStoredState<ViewMode>(storageKeys.activeView) ?? 'group')
   const [standingsMode, setStandingsMode] = useState<StandingsMode>(() => loadStoredState<StandingsMode>(storageKeys.standingsMode) ?? 'prediction')
+  const [teamSortMode, setTeamSortMode] = useState<TeamSortMode>(() => loadStoredState<TeamSortMode>('world-cup-betting-system/team-sort-mode') ?? 'group')
+  const [activeTeamId, setActiveTeamId] = useState<string>(
+    () => loadStoredState<string>('world-cup-betting-system/active-team-id') ?? (groupDefinitions[0]?.teams[0]?.id ?? ''),
+  )
   const [liveTeamForm, setLiveTeamForm] = useState<Partial<Record<string, TeamLiveForm>>>(() =>
     loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
   )
+  const [teamDirectory, setTeamDirectory] = useState<Partial<Record<string, TeamDirectoryEntry>>>(() =>
+    loadStoredState<Partial<Record<string, TeamDirectoryEntry>>>(storageKeys.teamDirectory) ?? {},
+  )
+  const [liveDataState, setLiveDataState] = useState<LiveDataState>(defaultLiveDataState)
   const [marketApiState, setMarketApiState] = useState<MarketApiState>(defaultMarketApiState)
   const [isRefreshingLiveData, setIsRefreshingLiveData] = useState(false)
-  const [liveRefreshStatus, setLiveRefreshStatus] = useState('Refresh uses public recent-results data to enrich the prediction model.')
+  const [refreshingTeamId, setRefreshingTeamId] = useState<string | null>(null)
+  const [isRefreshingBets, setIsRefreshingBets] = useState(false)
+  const [liveRefreshStatus, setLiveRefreshStatus] = useState('Use Refresh Live Data to load missing or stale national-team snapshots and squad information.')
   const [sourcePickerSlotKey, setSourcePickerSlotKey] = useState<BrokerSlotKey | null>(null)
   const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback>(defaultRefreshFeedback)
   const [backendConnectionStatus, setBackendConnectionStatus] = useState<BackendConnectionStatus>('checking')
   const [oddsApiKeyInput, setOddsApiKeyInput] = useState('')
   const [oddsApiKeyStatus, setOddsApiKeyStatus] = useState('The key stays local in the running backend session.')
+  const [apiFootballKeyInput, setApiFootballKeyInput] = useState('')
+  const [footballDataKeyInput, setFootballDataKeyInput] = useState('')
+  const [liveProviderKeyStatus, setLiveProviderKeyStatus] = useState('Provider keys stay local in the running backend session.')
   const [isRefreshingOddsUsage, setIsRefreshingOddsUsage] = useState(false)
   const [marketActionState, setMarketActionState] = useState<{ matchId: string; mode: 'missing' | 'reload' } | null>(null)
-  const didRunInitialRefresh = useRef(false)
   const standings = buildStandings(matches)
   const actualStandings = buildActualStandings(matches, marketApiState.actualResultsByMatchId)
   const activeStandings = standingsMode === 'real' ? actualStandings : standings
@@ -2560,6 +3097,40 @@ function App() {
     .sort((left, right) => right - left)[0]
   const marketRefreshTimestamp = latestMarketRefresh || (marketApiState.latestRefreshAt ? new Date(marketApiState.latestRefreshAt).getTime() : 0)
   const actualResultsRefreshTimestamp = marketApiState.latestActualResultsRefreshAt ? new Date(marketApiState.latestActualResultsRefreshAt).getTime() : 0
+  const allTeams = groupDefinitions.flatMap((groupDefinition) => groupDefinition.teams)
+  const teamsNeedingLiveFormRefresh = allTeams.filter((team) => isSnapshotStale(liveTeamForm[team.id]?.refreshedAt))
+  const teamsNeedingDirectoryRefresh = allTeams.filter(
+    (team) =>
+      isSnapshotStale(teamDirectory[team.id]?.refreshedAt) ||
+      shouldRetryPartialRoster(teamDirectory[team.id], liveDataState),
+  )
+  const teamRefreshTargets = allTeams.filter(
+    (team) =>
+      isSnapshotStale(liveTeamForm[team.id]?.refreshedAt) ||
+      isSnapshotStale(teamDirectory[team.id]?.refreshedAt) ||
+      shouldRetryPartialRoster(teamDirectory[team.id], liveDataState),
+  )
+  const sortedTeams = [...allTeams].sort((left, right) => {
+    if (teamSortMode === 'alphabetical') {
+      return left.name.localeCompare(right.name)
+    }
+
+    if (teamSortMode === 'ranking') {
+      if (right.rating !== left.rating) {
+        return right.rating - left.rating
+      }
+
+      return left.name.localeCompare(right.name)
+    }
+
+    if (left.group !== right.group) {
+      return left.group.localeCompare(right.group)
+    }
+
+    return left.name.localeCompare(right.name)
+  })
+  const activeTeam = sortedTeams.find((team) => team.id === activeTeamId) ?? sortedTeams[0] ?? null
+  const activeTeamDirectory = activeTeam ? teamDirectory[activeTeam.id] : undefined
   const knockoutStageConfig: { stage: KnockoutStage; title: string; subtitle: string }[] = [
     { stage: 'roundOf32', title: 'Round of 32', subtitle: '32 teams enter the bracket here.' },
     { stage: 'roundOf16', title: 'Round of 16', subtitle: 'Winners from the opening knockout round.' },
@@ -2586,8 +3157,20 @@ function App() {
   }, [standingsMode])
 
   useEffect(() => {
+    window.localStorage.setItem('world-cup-betting-system/team-sort-mode', JSON.stringify(teamSortMode))
+  }, [teamSortMode])
+
+  useEffect(() => {
+    window.localStorage.setItem('world-cup-betting-system/active-team-id', JSON.stringify(activeTeamId))
+  }, [activeTeamId])
+
+  useEffect(() => {
     window.localStorage.setItem(storageKeys.liveTeamForm, JSON.stringify(liveTeamForm))
   }, [liveTeamForm])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.teamDirectory, JSON.stringify(teamDirectory))
+  }, [teamDirectory])
 
   useEffect(() => {
     void fetchMarketStateFromBackend()
@@ -2601,21 +3184,129 @@ function App() {
       })
   }, [])
 
-  const handleRefreshLiveData = useCallback(async () => {
+  useEffect(() => {
+    void fetchLiveDataStateFromBackend()
+      .then((state) => {
+        setLiveDataState(state)
+        setLiveTeamForm((currentValue) => ({ ...currentValue, ...state.liveTeamFormById }))
+        setTeamDirectory((currentValue) => ({ ...currentValue, ...state.teamDirectoryById }))
+        setLiveRefreshStatus(state.refreshStatus)
+      })
+      .catch(() => {
+        setLiveDataState(defaultLiveDataState)
+      })
+  }, [])
+
+  async function handleRefreshLiveData() {
+    if (teamRefreshTargets.length === 0) {
+      setLiveRefreshStatus('All saved team snapshots are still fresh. No new federation data had to be downloaded.')
+      setRefreshFeedback({
+        kind: 'success',
+        title: 'Team data is already up to date.',
+        details: [
+          `Live form snapshots already cover ${allTeams.length} of ${allTeams.length} teams inside the freshness window.`,
+          `Roster snapshots already cover ${allTeams.length} of ${allTeams.length} teams inside the freshness window and do not need an upgrade pass.`,
+        ],
+      })
+      return
+    }
+
     setIsRefreshingLiveData(true)
-    setBackendConnectionStatus('checking')
-    setLiveRefreshStatus('Refreshing recent public team results...')
+    setLiveRefreshStatus('Refreshing public federation data for teams with missing or stale snapshots...')
     setRefreshFeedback({
       kind: 'loading',
-      title: 'Refreshing live data and backend market odds...',
+      title: 'Refreshing live team data...',
       details: [
-        'Team form is being pulled from the public recent-results source.',
-        'Backend market odds are being refreshed from the bookmaker adapters.',
+        `Backend providers are being queried for ${teamsNeedingDirectoryRefresh.length} teams with missing, stale or partial squad data.`,
+        `Public recent-results refresh is being checked for ${teamsNeedingLiveFormRefresh.length} teams.`,
       ],
     })
 
     try {
-      const uniqueTeams = groupDefinitions.flatMap((groupDefinition) => groupDefinition.teams)
+      const nextLiveDataState = await refreshLiveDataInBackend(teamRefreshTargets)
+      setLiveDataState(nextLiveDataState)
+      setLiveTeamForm((currentValue) => ({ ...currentValue, ...nextLiveDataState.liveTeamFormById }))
+      setTeamDirectory((currentValue) => ({ ...currentValue, ...nextLiveDataState.teamDirectoryById }))
+      setLiveRefreshStatus(nextLiveDataState.refreshStatus)
+
+      setRefreshFeedback({
+        kind: 'success',
+        title: 'Team data refreshed successfully.',
+        details: [
+          Object.keys(nextLiveDataState.liveTeamFormById).length > 0
+            ? `Live team form cache now covers ${Object.keys(nextLiveDataState.liveTeamFormById).length} teams.`
+            : teamsNeedingLiveFormRefresh.length > 0
+              ? 'Live team form did not return any new team snapshots.'
+              : 'All recent-form snapshots were already fresh.',
+          Object.keys(nextLiveDataState.teamDirectoryById).length > 0
+            ? `Team roster cache now covers ${Object.keys(nextLiveDataState.teamDirectoryById).length} teams.`
+            : teamsNeedingDirectoryRefresh.length > 0
+              ? 'Team roster provider did not return any new squad snapshots.'
+              : 'All roster snapshots were already fresh.',
+          nextLiveDataState.providers.apiFootball.status,
+        ],
+      })
+    } catch (error) {
+      setRefreshFeedback({
+        kind: 'error',
+        title: 'Live team data refresh failed.',
+        details: [getErrorMessage(error)],
+      })
+    } finally {
+      setIsRefreshingLiveData(false)
+    }
+  }
+
+  async function handleRefreshSingleTeam(team: Team) {
+    setRefreshingTeamId(team.id)
+    setLiveRefreshStatus(`Refreshing squad data only for ${team.name}...`)
+    setRefreshFeedback({
+      kind: 'loading',
+      title: `Refreshing ${team.name}...`,
+      details: [
+        `Backend providers are being queried only for ${team.name}.`,
+        'Existing data for all other teams will be left unchanged.',
+      ],
+    })
+
+    try {
+      const nextLiveDataState = await refreshLiveDataInBackend([team])
+      setLiveDataState(nextLiveDataState)
+      setLiveTeamForm((currentValue) => ({ ...currentValue, ...nextLiveDataState.liveTeamFormById }))
+      setTeamDirectory((currentValue) => ({ ...currentValue, ...nextLiveDataState.teamDirectoryById }))
+      setLiveRefreshStatus(nextLiveDataState.refreshStatus)
+      setRefreshFeedback({
+        kind: 'success',
+        title: `${team.name} refreshed successfully.`,
+        details: [
+          `Team roster cache now covers ${Object.keys(nextLiveDataState.teamDirectoryById).length} teams.`,
+          nextLiveDataState.providers.apiFootball.status,
+        ],
+      })
+    } catch (error) {
+      setRefreshFeedback({
+        kind: 'error',
+        title: `Could not refresh ${team.name}.`,
+        details: [getErrorMessage(error)],
+      })
+    } finally {
+      setRefreshingTeamId(null)
+    }
+  }
+
+  async function handleRefreshBets() {
+    setIsRefreshingBets(true)
+    setBackendConnectionStatus('checking')
+    setRefreshFeedback({
+      kind: 'loading',
+      title: 'Refreshing bets and bookmaker odds...',
+      details: [
+        'Backend market odds are being refreshed from bookmaker adapters.',
+        'Completed match results from the odds provider are being refreshed too.',
+      ],
+    })
+
+    try {
       const marketTargets: MarketTarget[] = [
         ...matches.map((match) => ({
           id: match.id,
@@ -2632,72 +3323,27 @@ function App() {
             awayTeam: item.awayTeam!,
           })),
       ]
-      const [liveResults, marketResult] = await Promise.all([
-        Promise.all(
-          uniqueTeams.map(async (team) => ({
-            teamId: team.id,
-            liveForm: await fetchLiveTeamForm(team).catch(() => null),
-          })),
-        ),
-        refreshMarketStateInBackend(marketTargets)
-          .then((state) => ({ state, error: null }))
-          .catch((error) => ({ state: defaultMarketApiState, error: getErrorMessage(error) })),
-      ])
 
-      const nextLiveTeamForm = liveResults.reduce<Partial<Record<string, TeamLiveForm>>>((accumulator, item) => {
-        if (item.liveForm) {
-          accumulator[item.teamId] = item.liveForm
-        }
-
-        return accumulator
-      }, {})
-
-      if (Object.keys(nextLiveTeamForm).length > 0) {
-        setLiveTeamForm((currentValue) => ({ ...currentValue, ...nextLiveTeamForm }))
-        setLiveRefreshStatus(
-          `Loaded live form for ${Object.keys(nextLiveTeamForm).length} of ${uniqueTeams.length} teams from TheSportsDB recent results.`,
-        )
-      } else {
-        setLiveRefreshStatus(
-          'No live team form was loaded. TheSportsDB may be unavailable, rate-limited, or some national-team names may not match the public dataset.',
-        )
-      }
-      setMarketApiState(marketResult.state)
-      setBackendConnectionStatus(marketResult.error ? 'offline' : 'online')
+      const marketResult = await refreshMarketStateInBackend(marketTargets)
+      setMarketApiState(marketResult)
+      setBackendConnectionStatus('online')
       setRefreshFeedback({
-        kind: marketResult.error ? 'error' : 'success',
-        title: marketResult.error ? 'Refresh finished with problems.' : 'Refresh completed successfully.',
-        details: [
-          Object.keys(nextLiveTeamForm).length > 0
-            ? `Live team form updated for ${Object.keys(nextLiveTeamForm).length} of ${uniqueTeams.length} teams.`
-            : 'Live team form did not return any new team snapshots.',
-          marketResult.error
-            ? marketResult.error
-            : marketResult.state.marketStatus,
-          marketResult.state.actualResultStatus,
-          marketResult.state.stsStatus,
-        ],
+        kind: 'success',
+        title: 'Bets refreshed successfully.',
+        details: [marketResult.marketStatus, marketResult.actualResultStatus, marketResult.stsStatus],
+      })
+    } catch (error) {
+      const message = getErrorMessage(error)
+      setBackendConnectionStatus(message.includes('Odds API key is missing') ? 'online' : 'offline')
+      setRefreshFeedback({
+        kind: 'error',
+        title: 'Bets refresh failed.',
+        details: [message],
       })
     } finally {
-      setIsRefreshingLiveData(false)
+      setIsRefreshingBets(false)
     }
-  }, [matches, resolvedKnockoutMatches])
-
-  useEffect(() => {
-    if (didRunInitialRefresh.current) {
-      return
-    }
-
-    if (latestLiveRefresh && Date.now() - latestLiveRefresh < 1000 * 60 * 60 * 6) {
-      didRunInitialRefresh.current = true
-      return
-    }
-
-    didRunInitialRefresh.current = true
-    queueMicrotask(() => {
-      void handleRefreshLiveData()
-    })
-  }, [handleRefreshLiveData, latestLiveRefresh])
+  }
 
   function handleScrollToGroup(groupName: string) {
     setActiveView('group')
@@ -2752,7 +3398,7 @@ function App() {
     setMarketApiState(nextState)
     setBackendConnectionStatus('online')
     setOddsApiKeyInput('')
-    setOddsApiKeyStatus('Key accepted for this backend session. Now run Refresh live data & odds.')
+    setOddsApiKeyStatus('Key accepted for this backend session. Now run Refresh Bets.')
   }
 
   async function handleRefreshOddsApiUsage() {
@@ -2774,6 +3420,39 @@ function App() {
     }
 
     setIsRefreshingOddsUsage(false)
+  }
+
+  async function handleSubmitLiveProviderKey(providerKey: 'api-football' | 'football-data') {
+    const apiKey = providerKey === 'api-football' ? apiFootballKeyInput.trim() : footballDataKeyInput.trim()
+
+    if (!apiKey) {
+      setLiveProviderKeyStatus('Paste the provider key first.')
+      return
+    }
+
+    setLiveProviderKeyStatus(`Submitting ${providerKey === 'api-football' ? 'API-Football' : 'football-data.org'} key to the local backend...`)
+
+    const nextState = await submitLiveProviderKeyToBackend(providerKey, apiKey).catch((error) => {
+      setLiveProviderKeyStatus(getErrorMessage(error))
+      return null
+    })
+
+    if (!nextState) {
+      return
+    }
+
+    setLiveDataState(nextState)
+    setLiveProviderKeyStatus(
+      providerKey === 'api-football'
+        ? 'API-Football key accepted. Refresh Live Data to load richer squads.'
+        : 'football-data.org key accepted. Refresh Live Data to use it as a secondary provider.',
+    )
+
+    if (providerKey === 'api-football') {
+      setApiFootballKeyInput('')
+    } else {
+      setFootballDataKeyInput('')
+    }
   }
 
   function getMarketTargetByMatchId(matchId: string): MarketTarget | null {
@@ -2843,7 +3522,7 @@ function App() {
           ? (() => {
               const nextAttempt = (match.predictionAttempt ?? 0) + 1
               const groupState = getGroupStateContext(match, currentMatches)
-              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, {
+              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, teamDirectory, {
                 groupState,
                 marketSignal: marketApiState.consensusByMatchId[match.id],
               })
@@ -2876,7 +3555,7 @@ function App() {
 
         const nextAttempt = (match.predictionAttempt ?? 0) + 1
         const groupState = getGroupStateContext(match, currentMatches)
-        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, {
+        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, teamDirectory, {
           groupState,
           marketSignal: marketApiState.consensusByMatchId[match.id],
         })
@@ -3081,6 +3760,7 @@ function App() {
                     }
                   : undefined,
                 liveTeamForm,
+                teamDirectory,
                 {
                   knockout: true,
                   marketSignal: marketApiState.consensusByMatchId[match.id],
@@ -3108,6 +3788,60 @@ function App() {
     )
   }
 
+  function handleTryToPredictKnockoutStage(stage: KnockoutStage) {
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.stage !== stage) {
+          return match
+        }
+
+        const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === match.id)
+
+        if (!resolvedMatch?.homeTeam || !resolvedMatch.awayTeam || resolvedMatch.lockReasons.length > 0) {
+          return match
+        }
+
+        const nextAttempt = (match.predictionAttempt ?? 0) + 1
+        const prediction = predictMatch(
+          resolvedMatch.homeTeam,
+          resolvedMatch.awayTeam,
+          resolvedMatch.schedule?.venueCity ?? 'New York/New Jersey',
+          nextAttempt,
+          resolvedMatch.schedule
+            ? {
+                restDaysHome: resolvedMatch.schedule.restDaysHome,
+                restDaysAway: resolvedMatch.schedule.restDaysAway,
+                travelKmHome: resolvedMatch.schedule.travelKmHome,
+                travelKmAway: resolvedMatch.schedule.travelKmAway,
+              }
+            : undefined,
+          liveTeamForm,
+          teamDirectory,
+          {
+            knockout: true,
+            marketSignal: marketApiState.consensusByMatchId[match.id],
+          },
+        )
+
+        return {
+          ...match,
+          predictionAttempt: nextAttempt,
+          manualEditorOpen: false,
+          lastResolvedHomeTeamId: resolvedMatch.homeTeam.id,
+          lastResolvedAwayTeamId: resolvedMatch.awayTeam.id,
+          prediction,
+          predictionHistory: appendHistory(match.predictionHistory, {
+            action: 'generated',
+            stage: 'knockout',
+            source: 'model',
+            summary: `Knockout prediction v${nextAttempt} generated.`,
+            prediction,
+          }),
+        }
+      }),
+    )
+  }
+
   function handleAcceptKnockout(matchId: string) {
     const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === matchId)
 
@@ -3129,6 +3863,32 @@ function App() {
             }
           : match,
       ),
+    )
+  }
+
+  function handleAcceptAllKnockoutStage(stage: KnockoutStage) {
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.stage !== stage || !match.prediction) {
+          return match
+        }
+
+        const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === match.id)
+
+        return {
+          ...match,
+          lastResolvedHomeTeamId: resolvedMatch?.homeTeam?.id,
+          lastResolvedAwayTeamId: resolvedMatch?.awayTeam?.id,
+          acceptedPrediction: match.prediction,
+          predictionHistory: appendHistory(match.predictionHistory, {
+            action: 'accepted',
+            stage: 'knockout',
+            source: 'system',
+            summary: 'Knockout prediction accepted.',
+            prediction: match.prediction,
+          }),
+        }
+      }),
     )
   }
 
@@ -3263,14 +4023,24 @@ function App() {
     window.localStorage.removeItem(storageKeys.activeView)
     window.localStorage.removeItem(storageKeys.standingsMode)
     window.localStorage.removeItem(storageKeys.liveTeamForm)
+    window.localStorage.removeItem(storageKeys.teamDirectory)
+    window.localStorage.removeItem('world-cup-betting-system/team-sort-mode')
+    window.localStorage.removeItem('world-cup-betting-system/active-team-id')
     setMatches(createInitialMatches())
     setKnockoutMatches(createInitialKnockoutMatches())
     setActiveView('group')
     setStandingsMode('prediction')
+    setTeamSortMode('group')
+    setActiveTeamId(groupDefinitions[0]?.teams[0]?.id ?? '')
     setLiveTeamForm({})
+    setTeamDirectory({})
+    setLiveDataState(defaultLiveDataState)
     setBackendConnectionStatus('checking')
 
-    const nextState = await resetMarketStateInBackend().catch(() => null)
+    const [nextState, nextLiveDataState] = await Promise.all([
+      resetMarketStateInBackend().catch(() => null),
+      resetLiveDataInBackend().catch(() => null),
+    ])
 
     if (nextState) {
       setMarketApiState(nextState)
@@ -3278,6 +4048,11 @@ function App() {
     } else {
       setMarketApiState(defaultMarketApiState)
       setBackendConnectionStatus('offline')
+    }
+
+    if (nextLiveDataState) {
+      setLiveDataState(nextLiveDataState)
+      setLiveRefreshStatus(nextLiveDataState.refreshStatus)
     }
   }
 
@@ -3525,6 +4300,68 @@ function App() {
               </a>
             </p>
             <p className="hero-status-copy">{oddsApiKeyStatus}</p>
+            <div className="live-provider-box">
+              <div className="live-provider-status-grid">
+                <div>
+                  <span>API-Football</span>
+                  <strong>{liveDataState.providers.apiFootball.configured ? 'Active' : 'Missing key'}</strong>
+                  <small>{liveDataState.providers.apiFootball.status}</small>
+                </div>
+                <div>
+                  <span>football-data.org</span>
+                  <strong>{liveDataState.providers.footballData.configured ? 'Active' : 'Optional key'}</strong>
+                  <small>{liveDataState.providers.footballData.status}</small>
+                </div>
+                <div>
+                  <span>TheSportsDB</span>
+                  <strong>Fallback</strong>
+                  <small>{liveDataState.providers.theSportsDb.status}</small>
+                </div>
+              </div>
+              <div className="live-provider-forms">
+                <form className="api-key-form" onSubmit={(event) => { event.preventDefault(); void handleSubmitLiveProviderKey('api-football') }}>
+                  <label>
+                    <span>API-Football key</span>
+                    <input
+                      type="password"
+                      value={apiFootballKeyInput}
+                      onChange={(event) => setApiFootballKeyInput(event.target.value)}
+                      placeholder="Paste your API-Football key"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button type="submit" className="secondary-button compact-button">
+                    Submit
+                  </button>
+                </form>
+                <form className="api-key-form" onSubmit={(event) => { event.preventDefault(); void handleSubmitLiveProviderKey('football-data') }}>
+                  <label>
+                    <span>football-data.org key</span>
+                    <input
+                      type="password"
+                      value={footballDataKeyInput}
+                      onChange={(event) => setFootballDataKeyInput(event.target.value)}
+                      placeholder="Paste your football-data key"
+                      autoComplete="off"
+                    />
+                  </label>
+                  <button type="submit" className="secondary-button compact-button">
+                    Submit
+                  </button>
+                </form>
+              </div>
+              <p className="api-key-help">
+                Need provider access?{' '}
+                <a href="https://www.api-football.com/pricing" target="_blank" rel="noreferrer" className="api-key-link">
+                  Open API-Football
+                </a>
+                {' '}or{' '}
+                <a href="https://www.football-data.org/" target="_blank" rel="noreferrer" className="api-key-link">
+                  Open football-data.org
+                </a>
+              </p>
+              <p className="hero-status-copy">{liveProviderKeyStatus}</p>
+            </div>
             <div className="refresh-feedback-box">
               <strong>{refreshFeedback.title}</strong>
               <div className="refresh-feedback-list">
@@ -3536,7 +4373,10 @@ function App() {
           </article>
           <div className="hero-button-stack">
             <button type="button" className="secondary-button hero-action-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
-              {isRefreshingLiveData ? 'Refreshing live data & odds...' : 'Refresh live data & odds'}
+              {isRefreshingLiveData ? 'Refreshing live data...' : 'Refresh Live Data'}
+            </button>
+            <button type="button" className="secondary-button hero-action-button" onClick={() => void handleRefreshBets()} disabled={isRefreshingBets}>
+              {isRefreshingBets ? 'Refreshing bets...' : 'Refresh Bets'}
             </button>
             <button type="button" className="secondary-button hero-action-button" onClick={handleReset}>
               Reset simulation
@@ -3577,6 +4417,13 @@ function App() {
           onClick={() => setActiveView('bracket')}
         >
           Bracket Phase
+        </button>
+        <button
+          type="button"
+          className={`tab-button ${activeView === 'teams' ? 'tab-button-active' : ''}`}
+          onClick={() => setActiveView('teams')}
+        >
+          Teams
         </button>
       </section>
 
@@ -3688,45 +4535,43 @@ function App() {
               {groupDefinitions.map((groupDefinition) => (
                 <section key={groupDefinition.name} id={`group-section-${groupDefinition.name}`} className="group-card">
                   <div className="group-card-header">
-                  <div>
-                    <p className="eyebrow">Group {groupDefinition.name}</p>
-                    <div className="group-team-list" aria-label={`Teams in group ${groupDefinition.name}`}>
+                    <div>
+                      <p className="eyebrow">Group {groupDefinition.name}</p>
+                      <div className="group-team-list" aria-label={`Teams in group ${groupDefinition.name}`}>
                         {groupDefinition.teams.map((team) => (
                           <span key={team.id} className="table-team">
                             <img className="team-flag" src={getFlagUrl(team)} alt={`Flag of ${team.name}`} />
                             <span>{team.name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="group-actions">
+                      <button
+                        type="button"
+                        className="secondary-button group-predict-button"
+                        onClick={() => handleTryToPredictGroup(groupDefinition.name)}
+                      >
+                        Try to predict Group
+                      </button>
+                      <button
+                        type="button"
+                        className="secondary-button group-predict-button"
+                        onClick={() => handleAcceptAllGroup(groupDefinition.name)}
+                        disabled={!matches.some((match) => match.group === groupDefinition.name && Boolean(match.prediction))}
+                      >
+                        Accept All
+                      </button>
+                      <span className="badge">
+                        {
+                          matches.filter(
+                            (match) => match.group === groupDefinition.name && Boolean(match.acceptedPrediction),
+                          ).length
+                        }
+                        /6 accepted
                       </span>
-                    ))}
+                    </div>
                   </div>
-                  </div>
-                  <div className="group-actions">
-                    <button
-                      type="button"
-                      className="secondary-button group-predict-button"
-                      onClick={() => handleTryToPredictGroup(groupDefinition.name)}
-                    >
-                      Try to predict Group
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button group-predict-button"
-                      onClick={() => handleAcceptAllGroup(groupDefinition.name)}
-                      disabled={
-                        !matches.some((match) => match.group === groupDefinition.name && Boolean(match.prediction))
-                      }
-                    >
-                      Accept All
-                    </button>
-                    <span className="badge">
-                      {
-                        matches.filter(
-                          (match) => match.group === groupDefinition.name && Boolean(match.acceptedPrediction),
-                        ).length
-                      }
-                      /6 accepted
-                    </span>
-                  </div>
-                </div>
 
                   <div className="match-list">
                     {matches
@@ -3785,113 +4630,113 @@ function App() {
 
                           {renderBookmakerStrip(match.id)}
 
-                      {match.prediction ? (
-                        <div className="prediction-box">
-                          <div className="prediction-metrics">
-                            <span className="metric-pill">{match.homeTeam.name} {match.prediction.homeWinProbability}%</span>
-                            <span className="metric-pill">Draw {match.prediction.drawProbability}%</span>
-                            <span className="metric-pill">{match.awayTeam.name} {match.prediction.awayWinProbability}%</span>
-                            <span className="metric-pill">
-                              xG {match.prediction.homeExpectedGoals} - {match.prediction.awayExpectedGoals}
-                            </span>
-                            <span className="metric-pill">Model strength {match.prediction.modelStrength}%</span>
-                          </div>
-                          <p>
-                            <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
-                          </p>
-                          {renderPredictionExplanation(match.prediction)}
-                          {renderPredictionHistory(match.predictionHistory)}
+                          {match.prediction ? (
+                            <div className="prediction-box">
+                              <div className="prediction-metrics">
+                                <span className="metric-pill">{match.homeTeam.name} {match.prediction.homeWinProbability}%</span>
+                                <span className="metric-pill">Draw {match.prediction.drawProbability}%</span>
+                                <span className="metric-pill">{match.awayTeam.name} {match.prediction.awayWinProbability}%</span>
+                                <span className="metric-pill">
+                                  xG {match.prediction.homeExpectedGoals} - {match.prediction.awayExpectedGoals}
+                                </span>
+                                <span className="metric-pill">Model strength {match.prediction.modelStrength}%</span>
+                              </div>
+                              <p>
+                                <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
+                              </p>
+                              {renderPredictionExplanation(match.prediction)}
+                              {renderPredictionHistory(match.predictionHistory)}
                             </div>
                           ) : (
-                          <div className="prediction-box prediction-box-muted">
-                            <p>Generate a baseline score first, then accept it into the standings.</p>
-                          </div>
-                        )}
+                            <div className="prediction-box prediction-box-muted">
+                              <p>Generate a baseline score first, then accept it into the standings.</p>
+                            </div>
+                          )}
 
-                      {match.manualEditorOpen ? (
-                        <div className="manual-entry-box">
-                          <div className="manual-score-row">
-                            <label className="manual-score-field">
-                              <span>{match.homeTeam.name}</span>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                value={match.manualHomeGoals ?? ''}
-                                onChange={(event) => handleManualScoreChange(match.id, 'home', event.target.value)}
-                              />
-                            </label>
-                            <label className="manual-score-field">
-                              <span>{match.awayTeam.name}</span>
-                              <input
-                                type="text"
-                                inputMode="numeric"
-                                value={match.manualAwayGoals ?? ''}
-                                onChange={(event) => handleManualScoreChange(match.id, 'away', event.target.value)}
-                              />
-                            </label>
-                          </div>
-                          <div className="manual-entry-actions">
-                            <button
-                              type="button"
-                              className="secondary-button"
-                              onClick={() => handleSaveManualPrediction(match.id)}
-                              disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
-                            >
-                              Save manual prediction
+                          {match.manualEditorOpen ? (
+                            <div className="manual-entry-box">
+                              <div className="manual-score-row">
+                                <label className="manual-score-field">
+                                  <span>{match.homeTeam.name}</span>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={match.manualHomeGoals ?? ''}
+                                    onChange={(event) => handleManualScoreChange(match.id, 'home', event.target.value)}
+                                  />
+                                </label>
+                                <label className="manual-score-field">
+                                  <span>{match.awayTeam.name}</span>
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    value={match.manualAwayGoals ?? ''}
+                                    onChange={(event) => handleManualScoreChange(match.id, 'away', event.target.value)}
+                                  />
+                                </label>
+                              </div>
+                              <div className="manual-entry-actions">
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => handleSaveManualPrediction(match.id)}
+                                  disabled={match.manualHomeGoals === '' || match.manualAwayGoals === ''}
+                                >
+                                  Save manual prediction
+                                </button>
+                                <button
+                                  type="button"
+                                  className="secondary-button"
+                                  onClick={() => handleToggleManualEditor(match.id)}
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : null}
+
+                          <div className="action-row">
+                            <button type="button" className="primary-button" onClick={() => handleTryToPredict(match.id)}>
+                              {match.prediction ? 'Predict again' : 'Try to predict'}
                             </button>
                             <button
                               type="button"
                               className="secondary-button"
                               onClick={() => handleToggleManualEditor(match.id)}
                             >
-                              Cancel
+                              {match.manualEditorOpen ? 'Close manual entry' : 'Manual prediction'}
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => handleAccept(match.id)}
+                              disabled={!match.prediction}
+                            >
+                              Accept
+                            </button>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => handleResetMatch(match.id)}
+                              disabled={
+                                !match.prediction &&
+                                !match.acceptedPrediction &&
+                                !match.manualHomeGoals &&
+                                !match.manualAwayGoals
+                              }
+                            >
+                              Reset
                             </button>
                           </div>
-                        </div>
-                      ) : null}
-
-                      <div className="action-row">
-                        <button type="button" className="primary-button" onClick={() => handleTryToPredict(match.id)}>
-                          {match.prediction ? 'Predict again' : 'Try to predict'}
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => handleToggleManualEditor(match.id)}
-                        >
-                          {match.manualEditorOpen ? 'Close manual entry' : 'Manual prediction'}
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => handleAccept(match.id)}
-                          disabled={!match.prediction}
-                        >
-                          Accept
-                        </button>
-                        <button
-                          type="button"
-                          className="secondary-button"
-                          onClick={() => handleResetMatch(match.id)}
-                          disabled={
-                            !match.prediction &&
-                            !match.acceptedPrediction &&
-                            !match.manualHomeGoals &&
-                            !match.manualAwayGoals
-                          }
-                        >
-                          Reset
-                        </button>
-                      </div>
-                    </article>
-                  ))}
+                        </article>
+                      ))}
                   </div>
                 </section>
               ))}
             </div>
           </section>
         </>
-      ) : (
+      ) : activeView === 'bracket' ? (
         <>
           <section className="panel">
             <div className="section-header">
@@ -3899,22 +4744,6 @@ function App() {
                 <p className="eyebrow">Wild cards</p>
                 <h2>Best third-placed teams</h2>
                 <p>Round of 32 seeding uses {getStandingsModeLabel(standingsMode)}.</p>
-              </div>
-              <div className="standings-mode-switcher" aria-label="Choose table source for bracket seeding">
-                <button
-                  type="button"
-                  className={`tab-button ${standingsMode === 'prediction' ? 'tab-button-active' : ''}`}
-                  onClick={() => setStandingsMode('prediction')}
-                >
-                  Prediction table
-                </button>
-                <button
-                  type="button"
-                  className={`tab-button ${standingsMode === 'real' ? 'tab-button-active' : ''}`}
-                  onClick={() => setStandingsMode('real')}
-                >
-                  Real table
-                </button>
               </div>
             </div>
 
@@ -3933,41 +4762,59 @@ function App() {
             </div>
           </section>
 
-          {knockoutStageConfig.map(({ stage, title, subtitle }) => (
+          {knockoutStageConfig.map(({ stage, title, subtitle }) => {
+            const stageMatches = displayKnockoutMatches.filter((match) => match.stage === stage)
+            const stageAcceptedCount = stageMatches.filter((match) => Boolean(match.acceptedPrediction)).length
+            const stageCanPredictCount = stageMatches.filter((match) => {
+              const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === match.id)
+              return Boolean(resolvedMatch?.homeTeam && resolvedMatch.awayTeam && resolvedMatch.lockReasons.length === 0)
+            }).length
+            const stageCanAcceptCount = stageMatches.filter((match) => Boolean(match.prediction)).length
+
+            return (
             <section key={stage} className="panel">
               <div className="section-header">
                 <div>
-                  <p className="eyebrow">Bracket phase</p>
+                  <p className="eyebrow">Knockout stage</p>
                   <h2>{title}</h2>
                   <p>{subtitle}</p>
+                </div>
+                <div className="group-actions">
+                  <button
+                    type="button"
+                    className="secondary-button group-predict-button"
+                    onClick={() => handleTryToPredictKnockoutStage(stage)}
+                    disabled={stageCanPredictCount === 0}
+                  >
+                    Try to predict all
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button group-predict-button"
+                    onClick={() => handleAcceptAllKnockoutStage(stage)}
+                    disabled={stageCanAcceptCount === 0}
+                  >
+                    Accept all
+                  </button>
+                  <span className="badge">
+                    {stageAcceptedCount}/{stageMatches.length} accepted
+                  </span>
                 </div>
               </div>
 
               <div className="knockout-stage-grid">
-                {resolvedKnockoutMatches
-                  .filter((resolvedMatch) => resolvedMatch.match.stage === stage)
-                  .sort((left, right) => Number(left.match.id) - Number(right.match.id))
-                  .map((resolvedMatch) => {
-                    const match = resolvedMatch.match
+                {stageMatches.map((match) => {
+                    const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === match.id)!
                     const homeTeam = resolvedMatch.homeTeam
                     const awayTeam = resolvedMatch.awayTeam
                     const canPredict = Boolean(homeTeam && awayTeam && resolvedMatch.lockReasons.length === 0)
-                    const scoreLabel = match.acceptedPrediction
-                      ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}${match.acceptedPrediction.knockoutResolution === 'extraTime' ? ' aet' : match.acceptedPrediction.knockoutResolution === 'penalties' ? ` pens ${match.acceptedPrediction.penaltyScore}` : ''}`
-                      : match.prediction
-                        ? `${match.prediction.homeGoals} : ${match.prediction.awayGoals}${match.prediction.knockoutResolution === 'extraTime' ? ' aet' : match.prediction.knockoutResolution === 'penalties' ? ` pens ${match.prediction.penaltyScore}` : ''}`
-                        : 'vs'
+                    const scoreLabel = formatPredictionScore(match.acceptedPrediction ?? match.prediction) || '? : ?'
 
                     return (
-                      <article key={match.id} className="match-card knockout-match-card">
+                      <article key={match.id} className="match-card">
                         <div className="match-meta">
-                          <span>{match.label}</span>
-                          <span>{title}</span>
-                        </div>
-
-                        <div className="knockout-slot-box">
-                          <span>{resolvedMatch.displayHomeSlot}</span>
-                          <span>{resolvedMatch.displayAwaySlot}</span>
+                          <span>{resolvedMatch.schedule ? `${resolvedMatch.schedule.localDateLabel} / ${resolvedMatch.schedule.localTimeLabel}` : 'TBC'}</span>
+                          <span>{title} / {match.id}</span>
                         </div>
 
                         {resolvedMatch.schedule ? (
@@ -4145,8 +4992,272 @@ function App() {
                   })}
               </div>
             </section>
-          ))}
+            )
+          })}
         </>
+      ) : (
+        <section className="panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Teams</p>
+              <h2>National teams, squads and staff</h2>
+              <p>Team tabs use flag graphics, group order and the latest public roster snapshot stored in your browser.</p>
+            </div>
+            <div className="teams-header-badges">
+              <span className="badge">
+                {Object.keys(teamDirectory).length}/{allTeams.length} rosters loaded
+              </span>
+              <span className="badge">
+                {teamRefreshTargets.length} teams need refresh
+              </span>
+            </div>
+          </div>
+
+          <div className="teams-toolbar">
+            <div className="teams-sort-switcher" aria-label="Sort teams">
+              <button
+                type="button"
+                className={`tab-button ${teamSortMode === 'group' ? 'tab-button-active' : ''}`}
+                onClick={() => setTeamSortMode('group')}
+              >
+                By group
+              </button>
+              <button
+                type="button"
+                className={`tab-button ${teamSortMode === 'alphabetical' ? 'tab-button-active' : ''}`}
+                onClick={() => setTeamSortMode('alphabetical')}
+              >
+                Alphabetical
+              </button>
+              <button
+                type="button"
+                className={`tab-button ${teamSortMode === 'ranking' ? 'tab-button-active' : ''}`}
+                onClick={() => setTeamSortMode('ranking')}
+              >
+                By ranking
+              </button>
+            </div>
+            <p className="teams-toolbar-note">
+              Ranking order currently uses the app strength seed until a dedicated FIFA ranking feed is connected.
+              {' '}Use <strong>Refresh Live Data</strong> whenever a squad is empty or its snapshot is older than 12 hours.
+            </p>
+          </div>
+
+          <div className="team-tab-strip" role="tablist" aria-label="Choose team">
+            {sortedTeams.map((team) => (
+              <button
+                key={team.id}
+                type="button"
+                role="tab"
+                aria-selected={activeTeam?.id === team.id}
+                className={`team-tab-button ${activeTeam?.id === team.id ? 'team-tab-button-active' : ''}`}
+                onClick={() => setActiveTeamId(team.id)}
+              >
+                <img className="team-flag" src={getFlagUrl(team)} alt={`Flag of ${team.name}`} />
+                <span>{team.name}</span>
+              </button>
+            ))}
+          </div>
+
+          {activeTeam ? (
+            <div className="team-directory-layout">
+              <article className="team-profile-card">
+                <div className="team-profile-header">
+                  <div className="team-profile-title">
+                    <img className="team-profile-flag" src={getFlagUrl(activeTeam)} alt={`Flag of ${activeTeam.name}`} />
+                    <div>
+                      <p className="eyebrow">Group {activeTeam.group}</p>
+                      <h3>{activeTeam.name}</h3>
+                    </div>
+                  </div>
+                  <div className="team-profile-actions">
+                    <span className="badge">Seed rating {activeTeam.rating}</span>
+                    <button
+                      type="button"
+                      className="secondary-button compact-button"
+                      onClick={() => void handleRefreshSingleTeam(activeTeam)}
+                      disabled={refreshingTeamId === activeTeam.id || isRefreshingLiveData}
+                    >
+                      {refreshingTeamId === activeTeam.id ? 'Refreshing team...' : 'Refresh this team'}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="team-profile-grid">
+                  <div>
+                    <span>Source</span>
+                    <strong>{activeTeamDirectory?.source ?? 'Not loaded yet'}</strong>
+                  </div>
+                  <div>
+                    <span>Roster refresh</span>
+                    <strong>{activeTeamDirectory?.refreshedAt ? formatOptionalDate(activeTeamDirectory.refreshedAt) : 'Not loaded yet'}</strong>
+                  </div>
+                  <div>
+                    <span>Snapshot status</span>
+                    <strong>
+                      {!activeTeamDirectory
+                        ? 'Missing, refresh needed'
+                        : shouldRetryPartialRoster(activeTeamDirectory, liveDataState)
+                          ? 'Partial roster, refresh recommended'
+                          : isSnapshotStale(activeTeamDirectory.refreshedAt)
+                            ? 'Stale, refresh recommended'
+                            : 'Fresh'}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Roster coverage</span>
+                    <strong>
+                      {!activeTeamDirectory
+                        ? 'No roster loaded'
+                        : activeTeamDirectory.players.length >= 23
+                          ? `Full-looking squad (${activeTeamDirectory.players.length})`
+                          : `Partial provider roster (${activeTeamDirectory.players.length})`}
+                    </strong>
+                  </div>
+                  <div>
+                    <span>Stadium</span>
+                    <strong>{formatNullableStat(activeTeamDirectory?.stadium)}</strong>
+                  </div>
+                  <div>
+                    <span>Location</span>
+                    <strong>{formatNullableStat(activeTeamDirectory?.location)}</strong>
+                  </div>
+                  <div>
+                    <span>Founded</span>
+                    <strong>{formatNullableStat(activeTeamDirectory?.foundedYear)}</strong>
+                  </div>
+                  <div>
+                    <span>Website</span>
+                    <strong>{activeTeamDirectory?.website ? activeTeamDirectory.website.replace(/^https?:\/\//, '') : 'No data yet'}</strong>
+                  </div>
+                </div>
+
+                <div className="team-description-box">
+                  <strong>Team note</strong>
+                  <p>{activeTeamDirectory?.description ? activeTeamDirectory.description.slice(0, 340) : 'Roster and federation metadata will appear here after the live data refresh completes.'}</p>
+                </div>
+              </article>
+
+              <article className="team-staff-card">
+                <div className="team-card-heading">
+                  <div>
+                    <p className="eyebrow">Staff</p>
+                    <h3>Coaches and squad staff</h3>
+                  </div>
+                  <span className="badge">{activeTeamDirectory?.staff.length ?? 0}</span>
+                </div>
+                {activeTeamDirectory?.staff.length ? (
+                  <div className="team-staff-list">
+                    {activeTeamDirectory.staff.map((member) => (
+                      <div key={`${member.role}-${member.name}`} className="team-staff-item">
+                        <strong>{member.name}</strong>
+                        <span>{member.role}</span>
+                        <small>{member.nationality ?? 'Nationality not published'}</small>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="team-empty-state">Public staff data has not been matched yet for this team.</p>
+                )}
+              </article>
+            </div>
+          ) : null}
+
+          <article className="team-roster-card">
+            <div className="team-card-heading">
+              <div>
+                <p className="eyebrow">Roster</p>
+                <h3>{activeTeam?.name ?? 'Selected team'} players</h3>
+              </div>
+              <span className="badge">{activeTeamDirectory?.players.length ?? 0} players</span>
+            </div>
+
+            {activeTeamDirectory?.players.length ? (
+              <>
+                {activeTeamDirectory.players.length < 23 ? (
+                  <p className="team-empty-state">
+                    The current public provider returned only {activeTeamDirectory.players.length} players for this team.
+                    This is provider-side incomplete coverage, not a UI cap. To show full 23+ squads we need to switch
+                    the roster source or add a stronger fallback dataset.
+                  </p>
+                ) : null}
+                <div className="team-roster-table-wrap">
+                <table className="team-roster-table">
+                  <thead>
+                    <tr>
+                      <th>No.</th>
+                      <th>Player</th>
+                      <th>Position</th>
+                      <th>Age</th>
+                      <th>Club</th>
+                      <th>Born</th>
+                      <th>Height</th>
+                      <th>Weight</th>
+                      <th>National apps</th>
+                      <th>National goals</th>
+                      <th>National assists</th>
+                      <th>National YC</th>
+                      <th>National RC</th>
+                      <th>Tourn MP</th>
+                      <th>Tourn Min</th>
+                      <th>Tourn G</th>
+                      <th>Tourn A</th>
+                      <th>Tourn Fouls</th>
+                      <th>Tourn YC</th>
+                      <th>Tourn RC</th>
+                      <th>Rating</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeTeamDirectory.players.map((player) => (
+                      <tr key={player.id}>
+                        <td>{formatNullableStat(player.number)}</td>
+                        <td>
+                          <div className="player-name-cell">
+                            <div>
+                              <strong>{player.name}</strong>
+                              <span>{player.nationality ?? activeTeam?.name}</span>
+                            </div>
+                            <div className="player-availability-icons">
+                              {player.tournamentStats.injured ? <span className="availability-badge availability-badge-injured" title="Injured" aria-label="Injured" /> : null}
+                              {player.tournamentStats.unavailableNextMatch ? <span className="availability-badge availability-badge-suspended" title="Unavailable for the next match" aria-label="Unavailable for the next match" /> : null}
+                            </div>
+                          </div>
+                        </td>
+                        <td>{formatNullableStat(player.position)}</td>
+                        <td>{formatNullableStat(player.age)}</td>
+                        <td>{formatNullableStat(player.club)}</td>
+                        <td>{formatOptionalDate(player.dateOfBirth)}</td>
+                        <td>{formatNullableStat(player.height)}</td>
+                        <td>{formatNullableStat(player.weight)}</td>
+                        <td>{formatNullableStat(player.nationalTeamMatches)}</td>
+                        <td>{formatNullableStat(player.nationalTeamGoals)}</td>
+                        <td>{formatNullableStat(player.nationalTeamAssists)}</td>
+                        <td>{formatNullableStat(player.nationalTeamYellowCards)}</td>
+                        <td>{formatNullableStat(player.nationalTeamRedCards)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.matchesPlayed)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.minutesPlayed)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.goals)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.assists)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.fouls)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.yellowCards)}</td>
+                        <td>{formatNullableStat(player.tournamentStats.redCards)}</td>
+                        <td>{formatNullableStat(player.playerRating)}</td>
+                        <td>{formatNullableStat(player.status)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+              </>
+            ) : (
+              <p className="team-empty-state">
+                No roster is loaded for this team yet. Use <strong>Refresh Live Data</strong> to fetch the latest public squad snapshot.
+              </p>
+            )}
+          </article>
+        </section>
       )}
 
       {sourcePickerSlotKey ? (

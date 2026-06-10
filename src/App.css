@@ -268,6 +268,42 @@
   letter-spacing: 0;
 }
 
+.live-provider-box {
+  margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(8, 28, 54, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.live-provider-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.live-provider-status-grid span,
+.live-provider-status-grid strong,
+.live-provider-status-grid small {
+  display: block;
+}
+
+.live-provider-status-grid span,
+.live-provider-status-grid small {
+  color: rgba(244, 248, 242, 0.74);
+}
+
+.live-provider-status-grid strong {
+  color: #f4f8f2;
+  margin: 4px 0;
+}
+
+.live-provider-forms {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
 .hero-stats span,
 .match-meta span,
 .match-teams span,
@@ -1041,6 +1077,284 @@ tbody tr:last-child td {
   align-content: start;
 }
 
+.teams-toolbar {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.teams-header-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.teams-sort-switcher {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.teams-toolbar-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.team-tab-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.team-tab-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(8, 28, 54, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text-strong);
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.team-tab-button:hover {
+  transform: translateY(-1px);
+  background: white;
+}
+
+.team-tab-button-active {
+  background: linear-gradient(135deg, rgba(17, 94, 89, 0.14), rgba(255, 209, 102, 0.18));
+  border-color: rgba(17, 94, 89, 0.28);
+  box-shadow: 0 0 0 1px rgba(17, 94, 89, 0.08);
+}
+
+.team-directory-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, 0.75fr);
+  gap: 18px;
+  margin-bottom: 18px;
+}
+
+.team-profile-card,
+.team-staff-card,
+.team-roster-card {
+  padding: 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(245, 249, 247, 0.98));
+  border: 1px solid rgba(8, 28, 54, 0.08);
+}
+
+.team-profile-header,
+.team-card-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.team-profile-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.team-profile-title h3,
+.team-card-heading h3 {
+  margin: 0;
+  color: var(--text-strong);
+}
+
+.team-profile-flag {
+  width: 42px;
+  height: 30px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid rgba(8, 28, 54, 0.12);
+  background: white;
+  flex-shrink: 0;
+}
+
+.team-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.team-profile-grid span,
+.team-profile-grid strong {
+  display: block;
+}
+
+.team-profile-grid span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.team-profile-grid strong {
+  margin-top: 4px;
+  color: var(--text-strong);
+}
+
+.team-description-box {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: rgba(8, 28, 54, 0.04);
+  border: 1px solid rgba(8, 28, 54, 0.06);
+}
+
+.team-description-box strong {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-strong);
+}
+
+.team-description-box p,
+.team-empty-state {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.team-staff-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.team-staff-item {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(8, 28, 54, 0.04);
+  border: 1px solid rgba(8, 28, 54, 0.06);
+}
+
+.team-staff-item strong,
+.team-staff-item span,
+.team-staff-item small {
+  display: block;
+}
+
+.team-staff-item strong {
+  color: var(--text-strong);
+}
+
+.team-staff-item span,
+.team-staff-item small {
+  color: var(--muted);
+}
+
+.team-roster-card {
+  overflow: hidden;
+}
+
+.team-roster-table-wrap {
+  overflow-x: auto;
+  margin-top: 14px;
+}
+
+.team-roster-table {
+  min-width: 1680px;
+}
+
+.player-name-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.player-name-cell strong,
+.player-name-cell span {
+  display: block;
+}
+
+.player-name-cell strong {
+  color: var(--text-strong);
+}
+
+.player-name-cell span {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.player-availability-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.availability-badge {
+  position: relative;
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(8, 28, 54, 0.14);
+  background: white;
+}
+
+.availability-badge::before,
+.availability-badge::after {
+  content: '';
+  position: absolute;
+}
+
+.availability-badge-injured::before,
+.availability-badge-injured::after {
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 2px;
+  background: #d62828;
+  transform-origin: center;
+}
+
+.availability-badge-injured::before {
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.availability-badge-injured::after {
+  transform: translate(-50%, -50%) rotate(-45deg);
+}
+
+.availability-badge-suspended::before {
+  inset: 4px;
+  border: 2px solid #0f766e;
+  border-radius: 999px;
+}
+
+.availability-badge-suspended::after {
+  top: 50%;
+  left: 50%;
+  width: 11px;
+  height: 2px;
+  background: #0f766e;
+  transform: translate(-50%, -50%) rotate(-35deg);
+}
+
 .eyebrow {
   margin: 0 0 8px;
   text-transform: uppercase;
@@ -1055,13 +1369,16 @@ tbody tr:last-child td {
   .layout-grid,
   .info-grid,
   .path-grid,
-  .standings-grid {
+  .standings-grid,
+  .team-directory-layout,
+  .team-profile-grid {
     grid-template-columns: 1fr;
   }
 
   .hero-stats,
   .hero-refresh-panel,
-  .hero-refresh-meta {
+  .hero-refresh-meta,
+  .live-provider-status-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1108,6 +1425,12 @@ tbody tr:last-child td {
   }
 
   .knockout-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .team-tab-strip,
+  .teams-sort-switcher {
+    display: grid;
     grid-template-columns: 1fr;
   }
 
