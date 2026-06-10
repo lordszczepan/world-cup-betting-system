@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import './App.css'
 import { getAnnexCAssignment } from './annexC'
 import { knockoutScheduleByMatchId, type KnockoutScheduleItem } from './knockoutSchedule'
 
 type ViewMode = 'group' | 'bracket'
+type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
+type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
 
 type TeamModelProfile = {
   chanceCreation: number
@@ -49,6 +51,7 @@ type Prediction = {
   summary: string
   factorBreakdown: PredictionFactor[]
   inputSnapshot: PredictionInputSnapshot[]
+  marketSourceKey?: BookmakerSourceKey
   knockoutWinnerTeamId?: string
   knockoutResolution?: 'regularTime' | 'extraTime' | 'penalties'
   penaltyScore?: string
@@ -91,6 +94,82 @@ type TeamLiveForm = TeamRecentData & {
   refreshedAt: string
   sampleSize: number
 }
+
+type BookmakerOddsSnapshot = {
+  sourceKey: BookmakerSourceKey
+  sourceLabel: string
+  homeOdds: number
+  drawOdds: number
+  awayOdds: number
+  homeProbability: number
+  drawProbability: number
+  awayProbability: number
+  refreshedAt: string
+  note?: string
+}
+
+type MatchBookmakerOdds = Partial<Record<BookmakerSourceKey, BookmakerOddsSnapshot>>
+
+type MarketConsensusSnapshot = {
+  sourceKeys: BookmakerSourceKey[]
+  sourceLabel: string
+  homeProbability: number
+  drawProbability: number
+  awayProbability: number
+  refreshedAt: string
+}
+
+type ActualResultSnapshot = {
+  homeGoals: number
+  awayGoals: number
+  sourceLabel: string
+  refreshedAt: string
+  note?: string
+}
+
+type MarketTarget = {
+  id: string
+  kickoffUtc: string
+  homeTeam: Team
+  awayTeam: Team
+}
+
+type BookmakerSourceDefinition = {
+  key: BookmakerSourceKey
+  label: string
+  shortLabel: string
+  accent: string
+  featured: boolean
+  note?: string
+}
+
+type MarketApiState = {
+  availableSources: BookmakerSourceDefinition[]
+  brokerSlots: Record<BrokerSlotKey, BookmakerSourceKey>
+  oddsByMatchId: Record<string, MatchBookmakerOdds>
+  consensusByMatchId: Record<string, MarketConsensusSnapshot>
+  actualResultsByMatchId: Record<string, ActualResultSnapshot>
+  trustedSources: BookmakerSourceKey[]
+  marketStatus: string
+  actualResultStatus: string
+  stsStatus: string
+  latestRefreshAt?: string
+  latestActualResultsRefreshAt?: string
+  apiKeyConfigured: boolean
+  oddsApiUsage?: {
+    remaining: string | null
+    used: string | null
+    last: string | null
+  }
+}
+
+type RefreshFeedback = {
+  kind: 'idle' | 'loading' | 'success' | 'error'
+  title: string
+  details: string[]
+}
+
+type BackendConnectionStatus = 'checking' | 'online' | 'offline'
 
 type Match = {
   id: string
@@ -174,6 +253,7 @@ type ResolvedKnockoutMatch = {
   displayAwaySlot: string
   schedule: KnockoutMatchScheduleContext | null
   note?: string
+  lockReasons: string[]
 }
 
 type KnockoutMatchScheduleContext = KnockoutScheduleItem & {
@@ -537,6 +617,37 @@ const storageKeys = {
   liveTeamForm: 'world-cup-betting-system/live-team-form',
 } as const
 
+const bookmakerSources: BookmakerSourceDefinition[] = [
+  { key: 'betfair', label: 'Betfair Exchange', shortLabel: 'BF', accent: '#f59e0b', featured: true },
+  { key: 'pinnacle', label: 'Pinnacle', shortLabel: 'PN', accent: '#0f766e', featured: true },
+  { key: 'sts', label: 'STS', shortLabel: 'STS', accent: '#dc2626', featured: true, note: 'No data for this match.' },
+  { key: 'fanduel', label: 'FanDuel', shortLabel: 'FD', accent: '#2563eb', featured: false },
+] as const
+
+const defaultMarketApiState: MarketApiState = {
+  availableSources: [...bookmakerSources],
+  brokerSlots: {
+    broker1: 'betfair',
+    broker2: 'pinnacle',
+    broker3: 'sts',
+  },
+  oddsByMatchId: {},
+  consensusByMatchId: {},
+  actualResultsByMatchId: {},
+  trustedSources: ['betfair', 'pinnacle'],
+  marketStatus: 'Market odds will appear here after the backend refresh runs.',
+  actualResultStatus: 'Real match results will appear here after completed fixtures are available.',
+  stsStatus: 'STS backend adapter is ready for mapped match URLs.',
+  apiKeyConfigured: false,
+  oddsApiUsage: undefined,
+}
+
+const defaultRefreshFeedback: RefreshFeedback = {
+  kind: 'idle',
+  title: 'No refresh is running right now.',
+  details: ['Use `Refresh live data & odds` to update team form and backend market odds.'],
+}
+
 const liveSearchTeamNames: Partial<Record<string, string>> = {
   usa: 'United States',
   kor: 'South Korea',
@@ -551,6 +662,58 @@ const liveSearchTeamNames: Partial<Record<string, string>> = {
   alg: 'Algeria',
   cod: 'DR Congo',
   eng: 'England',
+}
+
+function findBookmakerSource(sourceKey: BookmakerSourceKey) {
+  return bookmakerSources.find((source) => source.key === sourceKey) ?? bookmakerSources[0]
+}
+
+function getMarketBlendWeight(sourceKey: BookmakerSourceKey) {
+  switch (sourceKey) {
+    case 'betfair':
+      return 0.42
+    case 'pinnacle':
+      return 0.38
+    case 'fanduel':
+      return 0.26
+    case 'sts':
+      return 0.24
+    default:
+      return 0.3
+  }
+}
+
+function blendPercent(modelPercent: number, marketPercent: number, sourceKey: BookmakerSourceKey) {
+  const weight = getMarketBlendWeight(sourceKey)
+  return modelPercent * (1 - weight) + marketPercent * weight
+}
+
+function selectScoreFromOutcome(
+  currentHomeGoals: number,
+  currentAwayGoals: number,
+  homeExpectedGoals: number,
+  awayExpectedGoals: number,
+  homePercent: number,
+  drawPercent: number,
+  awayPercent: number,
+) {
+  let nextHomeGoals = currentHomeGoals
+  let nextAwayGoals = currentAwayGoals
+  const preferredOutcome = Math.max(homePercent, drawPercent, awayPercent)
+
+  if (preferredOutcome === drawPercent) {
+    const sharedGoals = clamp(Math.round((homeExpectedGoals + awayExpectedGoals) / 2), 0, 3)
+    nextHomeGoals = sharedGoals
+    nextAwayGoals = sharedGoals
+  } else if (preferredOutcome === homePercent && nextHomeGoals <= nextAwayGoals) {
+    nextHomeGoals = clamp(Math.max(nextAwayGoals + 1, Math.round(homeExpectedGoals)), 1, 5)
+    nextAwayGoals = clamp(Math.min(nextAwayGoals, Math.max(0, nextHomeGoals - 1)), 0, 4)
+  } else if (preferredOutcome === awayPercent && nextAwayGoals <= nextHomeGoals) {
+    nextAwayGoals = clamp(Math.max(nextHomeGoals + 1, Math.round(awayExpectedGoals)), 1, 5)
+    nextHomeGoals = clamp(Math.min(nextHomeGoals, Math.max(0, nextAwayGoals - 1)), 0, 4)
+  }
+
+  return { homeGoals: nextHomeGoals, awayGoals: nextAwayGoals }
 }
 
 const knockoutMatchTemplates: Omit<KnockoutMatch, 'prediction' | 'acceptedPrediction'>[] = [
@@ -698,6 +861,18 @@ function getViewerTimeZone() {
 
 function formatViewerDateTime(date: Date) {
   return formatDateTime(date, getViewerTimeZone())
+}
+
+function getErrorMessage(error: unknown) {
+  if (error instanceof Error) {
+    if (/Failed to fetch/i.test(error.message)) {
+      return 'Backend market server is unreachable from the browser. Start `npm run server` and try again.'
+    }
+
+    return error.message
+  }
+
+  return 'Unknown refresh error.'
 }
 
 function buildHistoryEntry(entry: Omit<PredictionHistoryEntry, 'id' | 'createdAt'>): PredictionHistoryEntry {
@@ -999,6 +1174,78 @@ async function fetchLiveTeamForm(team: Team): Promise<TeamLiveForm | null> {
   }
 }
 
+async function fetchMarketStateFromBackend() {
+  const response = await fetch('/api/market/state')
+
+  if (!response.ok) {
+    throw new Error(`Market state request failed with ${response.status}.`)
+  }
+
+  return (await response.json()) as MarketApiState
+}
+
+async function refreshMarketStateInBackend(matches: MarketTarget[]) {
+  const response = await fetch('/api/market/refresh', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ matches }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Market refresh request failed with ${response.status}.`)
+  }
+
+  return (await response.json()) as MarketApiState
+}
+
+async function updateBrokerSlotInBackend(slotKey: BrokerSlotKey, sourceKey: BookmakerSourceKey) {
+  const response = await fetch(`/api/market/slots/${slotKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ sourceKey }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Broker slot update failed with ${response.status}.`)
+  }
+
+  return (await response.json()) as MarketApiState
+}
+
+async function submitOddsApiKeyToBackend(apiKey: string) {
+  const response = await fetch('/api/market/api-key', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ apiKey }),
+  })
+
+  if (!response.ok) {
+    throw new Error(`Odds API key submit failed with ${response.status}.`)
+  }
+
+  return (await response.json()) as MarketApiState
+}
+
+async function refreshOddsApiUsageInBackend() {
+  const response = await fetch('/api/market/usage', {
+    method: 'POST',
+  })
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null
+    throw new Error(payload?.message ?? `Odds API usage refresh failed with ${response.status}.`)
+  }
+
+  return (await response.json()) as MarketApiState
+}
+
+
 function calculateDistanceKm(fromLatitude: number, fromLongitude: number, toLatitude: number, toLongitude: number) {
   const earthRadiusKm = 6371
   const toRadians = (degrees: number) => (degrees * Math.PI) / 180
@@ -1132,7 +1379,7 @@ function predictMatch(
   attempt = 0,
   context?: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'>,
   liveTeamForm?: Partial<Record<string, TeamLiveForm>>,
-  options?: { knockout?: boolean; groupState?: GroupStateContext },
+  options?: { knockout?: boolean; groupState?: GroupStateContext; marketSignal?: MarketConsensusSnapshot },
 ): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
   const homeAttack = getAttackStrength(homeTeam)
@@ -1255,11 +1502,39 @@ function predictMatch(
   const normalizedHomeWinProbability = totalProbability > 0 ? homeWinProbability / totalProbability : homeWinProbability
   const normalizedDrawProbability = totalProbability > 0 ? drawProbability / totalProbability : drawProbability
   const normalizedAwayWinProbability = totalProbability > 0 ? awayWinProbability / totalProbability : awayWinProbability
-  const homeWinPercent = roundTo(normalizedHomeWinProbability * 100, 1)
-  const drawPercent = roundTo(normalizedDrawProbability * 100, 1)
-  const awayWinPercent = roundTo(normalizedAwayWinProbability * 100, 1)
+  const marketSignal = options?.marketSignal
+  const homeWinPercent = roundTo(
+    marketSignal
+      ? blendPercent(normalizedHomeWinProbability * 100, marketSignal.homeProbability, marketSignal.sourceKeys[0] ?? 'betfair')
+      : normalizedHomeWinProbability * 100,
+    1,
+  )
+  const drawPercent = roundTo(
+    marketSignal
+      ? blendPercent(normalizedDrawProbability * 100, marketSignal.drawProbability, marketSignal.sourceKeys[0] ?? 'betfair')
+      : normalizedDrawProbability * 100,
+    1,
+  )
+  const awayWinPercent = roundTo(
+    marketSignal
+      ? blendPercent(normalizedAwayWinProbability * 100, marketSignal.awayProbability, marketSignal.sourceKeys[0] ?? 'betfair')
+      : normalizedAwayWinProbability * 100,
+    1,
+  )
+  const renormalizedPercentTotal = homeWinPercent + drawPercent + awayWinPercent
+  const finalHomeWinPercent = roundTo((homeWinPercent / renormalizedPercentTotal) * 100, 1)
+  const finalDrawPercent = roundTo((drawPercent / renormalizedPercentTotal) * 100, 1)
+  const finalAwayWinPercent = roundTo((awayWinPercent / renormalizedPercentTotal) * 100, 1)
+  const adjustedScore = selectScoreFromOutcome(homeGoals, awayGoals, homeExpectedGoals, awayExpectedGoals, finalHomeWinPercent, finalDrawPercent, finalAwayWinPercent)
+  homeGoals = adjustedScore.homeGoals
+  awayGoals = adjustedScore.awayGoals
   const confidence = clamp(
-    Math.round(Math.max(homeWinPercent, drawPercent, awayWinPercent) + Math.abs(drawToleranceSwing) * 18 + Math.abs(motivationSwing) * 12),
+    Math.round(
+        Math.max(finalHomeWinPercent, finalDrawPercent, finalAwayWinPercent) +
+        Math.abs(drawToleranceSwing) * 18 +
+        Math.abs(motivationSwing) * 12 +
+        (marketSignal ? 5 : 0),
+    ),
     40,
     92,
   )
@@ -1298,6 +1573,9 @@ function predictMatch(
   const groupStateSummary = options?.groupState
     ? 'The group-state layer considers points, table position, likely rotation and whether a draw may already suit one side.'
     : 'The group-state layer is not active for this match.'
+  const marketContextSummary = marketSignal
+    ? `${marketSignal.sourceLabel} odds are blended into the model as an additional market signal from the backend market consensus layer.`
+    : 'No bookmaker market feed is blended into this run.'
   const factorBreakdown: PredictionFactor[] = [
     { label: 'Rating edge', impact: ratingGap / 90 },
     { label: 'Team profile edge', impact: creationSwing * 0.18 + finishingSwing * 0.12 + setPieceSwing * 0.08 + experienceSwing * 0.05 },
@@ -1308,6 +1586,7 @@ function predictMatch(
     { label: 'Rotation risk edge', impact: rotationSwing },
     { label: 'Motivation edge', impact: motivationSwing },
     { label: 'Draw tolerance swing', impact: drawToleranceSwing },
+    { label: 'Market odds edge', impact: marketSignal ? (marketSignal.homeProbability - marketSignal.awayProbability) / 100 : 0 },
     { label: 'Venue and altitude edge', impact: homeHostBoost - awayHostBoost * 0.4 + homeAltitudeAdjustment - awayAltitudeAdjustment * 0.35 },
   ]
     .sort((left, right) => Math.abs(right.impact) - Math.abs(left.impact))
@@ -1326,6 +1605,10 @@ function predictMatch(
     { label: 'Goals for per match', value: `${roundTo(homeRecent.goalsForPerMatch, 2)} vs ${roundTo(awayRecent.goalsForPerMatch, 2)}` },
     { label: 'Goals against per match', value: `${roundTo(homeRecent.goalsAgainstPerMatch, 2)} vs ${roundTo(awayRecent.goalsAgainstPerMatch, 2)}` },
     { label: 'Injury burden', value: `${roundTo(homeRecent.injuryBurden, 2)} vs ${roundTo(awayRecent.injuryBurden, 2)}` },
+    {
+      label: 'Market source',
+      value: marketSignal ? `${marketSignal.sourceLabel} (${marketSignal.homeProbability}% / ${marketSignal.drawProbability}% / ${marketSignal.awayProbability}%)` : 'not applied',
+    },
     {
       label: 'Group stakes',
       value: options?.groupState
@@ -1392,21 +1675,22 @@ function predictMatch(
     homeGoals,
     awayGoals,
     confidence,
-    homeWinProbability: homeWinPercent,
-    drawProbability: drawPercent,
-    awayWinProbability: awayWinPercent,
+    homeWinProbability: finalHomeWinPercent,
+    drawProbability: finalDrawPercent,
+    awayWinProbability: finalAwayWinPercent,
     homeExpectedGoals: roundTo(homeExpectedGoals, 2),
     awayExpectedGoals: roundTo(awayExpectedGoals, 2),
     modelStrength,
     factorBreakdown,
     inputSnapshot,
+    marketSourceKey: marketSignal?.sourceKeys[0],
     knockoutWinnerTeamId,
     knockoutResolution,
     penaltyScore,
     summary:
       attempt > 0
-        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`
-        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`,
+        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary} ${marketContextSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`
+        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary} ${groupStateSummary} ${marketContextSummary}${knockoutResolution === 'extraTime' ? ' Knockout resolution projects extra time.' : knockoutResolution === 'penalties' ? ' Knockout resolution projects penalties.' : ''}`,
   }
 }
 
@@ -1433,6 +1717,69 @@ function buildStandings(matches: Match[]) {
       .filter((match) => match.group === groupDefinition.name && match.acceptedPrediction)
       .forEach((match) => {
         const result = match.acceptedPrediction!
+        const home = table.get(match.homeTeam.id)!
+        const away = table.get(match.awayTeam.id)!
+
+        home.played += 1
+        away.played += 1
+        home.goalsFor += result.homeGoals
+        home.goalsAgainst += result.awayGoals
+        away.goalsFor += result.awayGoals
+        away.goalsAgainst += result.homeGoals
+
+        if (result.homeGoals > result.awayGoals) {
+          home.won += 1
+          away.lost += 1
+          home.points += 3
+        } else if (result.homeGoals < result.awayGoals) {
+          away.won += 1
+          home.lost += 1
+          away.points += 3
+        } else {
+          home.drawn += 1
+          away.drawn += 1
+          home.points += 1
+          away.points += 1
+        }
+
+        home.goalDifference = home.goalsFor - home.goalsAgainst
+        away.goalDifference = away.goalsFor - away.goalsAgainst
+      })
+
+    accumulator[groupDefinition.name] = [...table.values()].sort((left, right) => {
+      if (right.points !== left.points) return right.points - left.points
+      if (right.goalDifference !== left.goalDifference) return right.goalDifference - left.goalDifference
+      if (right.goalsFor !== left.goalsFor) return right.goalsFor - left.goalsFor
+      return right.team.rating - left.team.rating
+    })
+
+    return accumulator
+  }, {})
+}
+
+function buildActualStandings(matches: Match[], actualResultsByMatchId: Record<string, ActualResultSnapshot>) {
+  return groupDefinitions.reduce<Record<string, Standing[]>>((accumulator, groupDefinition) => {
+    const table = new Map<string, Standing>(
+      groupDefinition.teams.map((team) => [
+        team.id,
+        {
+          team,
+          played: 0,
+          won: 0,
+          drawn: 0,
+          lost: 0,
+          goalsFor: 0,
+          goalsAgainst: 0,
+          goalDifference: 0,
+          points: 0,
+        },
+      ]),
+    )
+
+    matches
+      .filter((match) => match.group === groupDefinition.name && actualResultsByMatchId[match.id])
+      .forEach((match) => {
+        const result = actualResultsByMatchId[match.id]
         const home = table.get(match.homeTeam.id)!
         const away = table.get(match.awayTeam.id)!
 
@@ -1541,8 +1888,9 @@ function getGroupStateContext(match: Match, matches: Match[]): GroupStateContext
   }
 }
 
-function rankThirdPlacedTeams(standings: Record<string, Standing[]>) {
+function rankThirdPlacedTeams(standings: Record<string, Standing[]>, matches: Match[]) {
   const thirdPlacedRows = groupDefinitions
+    .filter((groupDefinition) => isGroupComplete(matches, groupDefinition.name))
     .map((groupDefinition) => standings[groupDefinition.name]?.[2])
     .filter((standing): standing is Standing => Boolean(standing))
     .sort((left, right) => {
@@ -1556,6 +1904,39 @@ function rankThirdPlacedTeams(standings: Record<string, Standing[]>) {
     ...standing,
     rank: index + 1,
   }))
+}
+
+function getAcceptedGroupMatchCount(matches: Match[], groupName: string) {
+  return matches.filter((match) => match.group === groupName && match.acceptedPrediction).length
+}
+
+function isGroupComplete(matches: Match[], groupName: string) {
+  return getAcceptedGroupMatchCount(matches, groupName) === 6
+}
+
+function describeSlot(slot: string) {
+  if (/^[123][A-L]$/.test(slot)) {
+    const placeLabels = ['1st', '2nd', '3rd']
+    return `${placeLabels[Number(slot[0]) - 1]} place in Group ${slot[1]}`
+  }
+
+  if (/^W\d+$/.test(slot)) {
+    return `winner of Match ${slot.slice(1)}`
+  }
+
+  if (/^L\d+$/.test(slot)) {
+    return `loser of Match ${slot.slice(1)}`
+  }
+
+  if (/^3[A-L](\/[A-L])+$/.test(slot)) {
+    return `best third-place team from Groups ${slot.slice(1).replaceAll('/', ', ')}`
+  }
+
+  return slot
+}
+
+function getUniqueMessages(messages: string[]) {
+  return [...new Set(messages.filter(Boolean))]
 }
 
 function createPositionMap(standings: Record<string, Standing[]>) {
@@ -1717,10 +2098,26 @@ function resolveKnockoutMatches(
   const teamByName = new Map(allStandingTeams.map((team) => [team.name, team]))
 
   function resolveFromSlot(slot: string): Team | null {
+    return resolveSlot(slot).team
+  }
+
+  function resolveSlot(slot: string): { team: Team | null; reasons: string[] } {
     if (/^[123][A-L]$/.test(slot)) {
       const place = Number(slot[0]) - 1
       const groupName = slot[1]
-      return standings[groupName]?.[place]?.team ?? null
+      const acceptedGroupMatches = getAcceptedGroupMatchCount(groupMatches, groupName)
+
+      if (acceptedGroupMatches < 6) {
+        return {
+          team: null,
+          reasons: [`${describeSlot(slot)} is not final yet. Accept all Group ${groupName} matches first (${acceptedGroupMatches}/6 accepted).`],
+        }
+      }
+
+      return {
+        team: standings[groupName]?.[place]?.team ?? null,
+        reasons: standings[groupName]?.[place]?.team ? [] : [`${describeSlot(slot)} could not be resolved from the Group ${groupName} table.`],
+      }
     }
 
     if (/^W\d+$/.test(slot)) {
@@ -1729,10 +2126,15 @@ function resolveKnockoutMatches(
       const sourceMatch = knockoutById.get(sourceMatchId)
 
       if (!sourceResolved || !sourceMatch) {
-        return null
+        return { team: null, reasons: [`${describeSlot(slot)} is not available yet.`] }
       }
 
-      return getKnockoutWinner(sourceMatch, sourceResolved.homeTeam, sourceResolved.awayTeam)
+      const winner = getKnockoutWinner(sourceMatch, sourceResolved.homeTeam, sourceResolved.awayTeam)
+
+      return {
+        team: winner,
+        reasons: winner ? [] : [`Accept Match ${sourceMatchId} first to unlock ${describeSlot(slot)}.`],
+      }
     }
 
     if (/^L\d+$/.test(slot)) {
@@ -1741,13 +2143,27 @@ function resolveKnockoutMatches(
       const sourceMatch = knockoutById.get(sourceMatchId)
 
       if (!sourceResolved || !sourceMatch) {
-        return null
+        return { team: null, reasons: [`${describeSlot(slot)} is not available yet.`] }
       }
 
-      return getKnockoutLoser(sourceMatch, sourceResolved.homeTeam, sourceResolved.awayTeam)
+      const loser = getKnockoutLoser(sourceMatch, sourceResolved.homeTeam, sourceResolved.awayTeam)
+
+      return {
+        team: loser,
+        reasons: loser ? [] : [`Accept Match ${sourceMatchId} first to unlock ${describeSlot(slot)}.`],
+      }
     }
 
-    return null
+    if (/^3[A-L](\/[A-L])+$/.test(slot)) {
+      const completedGroups = groupDefinitions.filter((groupDefinition) => isGroupComplete(groupMatches, groupDefinition.name)).length
+
+      return {
+        team: null,
+        reasons: [`${describeSlot(slot)} needs the final best-third-place ranking. Complete more group tables first (${completedGroups}/12 groups complete).`],
+      }
+    }
+
+    return { team: null, reasons: [`${describeSlot(slot)} could not be resolved.`] }
   }
 
   const stageOrder: KnockoutStage[] = ['roundOf32', 'roundOf16', 'quarterFinals', 'semiFinals', 'thirdPlace', 'final']
@@ -1759,13 +2175,23 @@ function resolveKnockoutMatches(
       .forEach((match) => {
         if (stage === 'roundOf32') {
           const baseMatch = roundOf32ById.get(match.id)
-          const homeTeam = baseMatch && baseMatch.homeTeam !== 'TBD' ? resolveFromSlot(baseMatch.homeSlot) ?? teamByName.get(baseMatch.homeTeam) ?? null : null
-          const awayTeam = baseMatch && baseMatch.awayTeam !== 'TBD'
-            ? resolveFromSlot(baseMatch.awaySlot) ??
-              teamByName.get(baseMatch.awayTeam) ??
-              rankedThirds.find((standing) => standing.team.name === baseMatch.awayTeam)?.team ??
-              null
-            : null
+          const homeSlotResolution = baseMatch ? resolveSlot(baseMatch.homeSlot) : { team: null, reasons: ['This Round of 32 slot is not available yet.'] }
+          const awaySlotResolution = baseMatch ? resolveSlot(baseMatch.awaySlot) : { team: null, reasons: ['This Round of 32 slot is not available yet.'] }
+          const homeTeam =
+            baseMatch && baseMatch.homeTeam !== 'TBD'
+              ? homeSlotResolution.team ?? (homeSlotResolution.reasons.length === 0 ? teamByName.get(baseMatch.homeTeam) ?? null : null)
+              : null
+          const awayTeam =
+            baseMatch && baseMatch.awayTeam !== 'TBD'
+              ? awaySlotResolution.team ??
+                (awaySlotResolution.reasons.length === 0
+                  ? teamByName.get(baseMatch.awayTeam) ?? rankedThirds.find((standing) => standing.team.name === baseMatch.awayTeam)?.team ?? null
+                  : null)
+              : null
+          const lockReasons = getUniqueMessages([
+            ...(!homeTeam ? homeSlotResolution.reasons : []),
+            ...(!awayTeam ? awaySlotResolution.reasons : []),
+          ])
           const scheduleBase = knockoutScheduleByMatchId[match.id]
           const schedule = scheduleBase
             ? (() => {
@@ -1819,9 +2245,18 @@ function resolveKnockoutMatches(
             displayAwaySlot: baseMatch?.awaySlot ?? match.awaySlot,
             schedule,
             note: baseMatch?.note,
+            lockReasons,
           })
           return
         }
+        const homeSlotResolution = resolveSlot(match.homeSlot)
+        const awaySlotResolution = resolveSlot(match.awaySlot)
+        const homeTeam = homeSlotResolution.team
+        const awayTeam = awaySlotResolution.team
+        const lockReasons = getUniqueMessages([
+          ...(!homeTeam ? homeSlotResolution.reasons : []),
+          ...(!awayTeam ? awaySlotResolution.reasons : []),
+        ])
         const scheduleBase = knockoutScheduleByMatchId[match.id]
         const schedule = scheduleBase
           ? (() => {
@@ -1873,11 +2308,12 @@ function resolveKnockoutMatches(
           : null
         resolvedById.set(match.id, {
           match,
-          homeTeam: resolveFromSlot(match.homeSlot),
-          awayTeam: resolveFromSlot(match.awaySlot),
+          homeTeam,
+          awayTeam,
           displayHomeSlot: match.homeSlot,
           displayAwaySlot: match.awaySlot,
           schedule,
+          lockReasons,
         })
       })
   })
@@ -1890,11 +2326,16 @@ function sanitizeKnockoutMatches(knockoutMatches: KnockoutMatch[], resolvedMatch
     const resolvedMatch = resolvedMatches.find((item) => item.match.id === match.id)
     const currentHomeId = resolvedMatch?.homeTeam?.id
     const currentAwayId = resolvedMatch?.awayTeam?.id
+    const hadResolvedParticipants = Boolean(match.lastResolvedHomeTeamId || match.lastResolvedAwayTeamId)
     const participantsChanged =
-      match.lastResolvedHomeTeamId !== currentHomeId || match.lastResolvedAwayTeamId !== currentAwayId
+      hadResolvedParticipants && (match.lastResolvedHomeTeamId !== currentHomeId || match.lastResolvedAwayTeamId !== currentAwayId)
 
     if (!participantsChanged) {
-      return match
+      return {
+        ...match,
+        lastResolvedHomeTeamId: currentHomeId,
+        lastResolvedAwayTeamId: currentAwayId,
+      }
     }
 
     return {
@@ -1988,10 +2429,18 @@ function App() {
   const [liveTeamForm, setLiveTeamForm] = useState<Partial<Record<string, TeamLiveForm>>>(() =>
     loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
   )
+  const [marketApiState, setMarketApiState] = useState<MarketApiState>(defaultMarketApiState)
   const [isRefreshingLiveData, setIsRefreshingLiveData] = useState(false)
   const [liveRefreshStatus, setLiveRefreshStatus] = useState('Refresh uses public recent-results data to enrich the prediction model.')
+  const [sourcePickerSlotKey, setSourcePickerSlotKey] = useState<BrokerSlotKey | null>(null)
+  const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback>(defaultRefreshFeedback)
+  const [backendConnectionStatus, setBackendConnectionStatus] = useState<BackendConnectionStatus>('checking')
+  const [oddsApiKeyInput, setOddsApiKeyInput] = useState('')
+  const [oddsApiKeyStatus, setOddsApiKeyStatus] = useState('The key stays local in the running backend session.')
+  const [isRefreshingOddsUsage, setIsRefreshingOddsUsage] = useState(false)
   const standings = buildStandings(matches)
-  const rankedThirds = rankThirdPlacedTeams(standings)
+  const actualStandings = buildActualStandings(matches, marketApiState.actualResultsByMatchId)
+  const rankedThirds = rankThirdPlacedTeams(standings, matches)
   const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(knockoutMatches, matches, standings, rankedThirds)
   const displayKnockoutMatches = sanitizeKnockoutMatches(knockoutMatches, preliminaryResolvedKnockoutMatches)
   const resolvedKnockoutMatches = resolveKnockoutMatches(displayKnockoutMatches, matches, standings, rankedThirds)
@@ -2000,6 +2449,12 @@ function App() {
   const latestLiveRefresh = Object.values(liveTeamForm)
     .map((entry) => (entry?.refreshedAt ? new Date(entry.refreshedAt).getTime() : 0))
     .sort((left, right) => right - left)[0]
+  const latestMarketRefresh = Object.values(marketApiState.oddsByMatchId)
+    .flatMap((item) => Object.values(item))
+    .map((entry) => (entry?.refreshedAt ? new Date(entry.refreshedAt).getTime() : 0))
+    .sort((left, right) => right - left)[0]
+  const marketRefreshTimestamp = latestMarketRefresh || (marketApiState.latestRefreshAt ? new Date(marketApiState.latestRefreshAt).getTime() : 0)
+  const actualResultsRefreshTimestamp = marketApiState.latestActualResultsRefreshAt ? new Date(marketApiState.latestActualResultsRefreshAt).getTime() : 0
   const knockoutStageConfig: { stage: KnockoutStage; title: string; subtitle: string }[] = [
     { stage: 'roundOf32', title: 'Round of 32', subtitle: '32 teams enter the bracket here.' },
     { stage: 'roundOf16', title: 'Round of 16', subtitle: 'Winners from the opening knockout round.' },
@@ -2026,25 +2481,59 @@ function App() {
   }, [liveTeamForm])
 
   useEffect(() => {
-    if (latestLiveRefresh && Date.now() - latestLiveRefresh < 1000 * 60 * 60 * 6) {
-      return
-    }
+    void fetchMarketStateFromBackend()
+      .then((state) => {
+        setMarketApiState(state)
+        setBackendConnectionStatus('online')
+      })
+      .catch(() => {
+        setMarketApiState(defaultMarketApiState)
+        setBackendConnectionStatus('offline')
+      })
+  }, [])
 
-    void handleRefreshLiveData()
-  }, [latestLiveRefresh])
-
-  async function handleRefreshLiveData() {
+  const handleRefreshLiveData = useCallback(async () => {
     setIsRefreshingLiveData(true)
+    setBackendConnectionStatus('checking')
     setLiveRefreshStatus('Refreshing recent public team results...')
+    setRefreshFeedback({
+      kind: 'loading',
+      title: 'Refreshing live data and backend market odds...',
+      details: [
+        'Team form is being pulled from the public recent-results source.',
+        'Backend market odds are being refreshed from the bookmaker adapters.',
+      ],
+    })
 
     try {
       const uniqueTeams = groupDefinitions.flatMap((groupDefinition) => groupDefinition.teams)
-      const liveResults = await Promise.all(
-        uniqueTeams.map(async (team) => ({
-          teamId: team.id,
-          liveForm: await fetchLiveTeamForm(team).catch(() => null),
+      const marketTargets: MarketTarget[] = [
+        ...matches.map((match) => ({
+          id: match.id,
+          kickoffUtc: match.kickoffUtc,
+          homeTeam: match.homeTeam,
+          awayTeam: match.awayTeam,
         })),
-      )
+        ...resolvedKnockoutMatches
+          .filter((item) => item.homeTeam && item.awayTeam && item.schedule)
+          .map((item) => ({
+            id: item.match.id,
+            kickoffUtc: item.schedule!.kickoffUtc,
+            homeTeam: item.homeTeam!,
+            awayTeam: item.awayTeam!,
+          })),
+      ]
+      const [liveResults, marketResult] = await Promise.all([
+        Promise.all(
+          uniqueTeams.map(async (team) => ({
+            teamId: team.id,
+            liveForm: await fetchLiveTeamForm(team).catch(() => null),
+          })),
+        ),
+        refreshMarketStateInBackend(marketTargets)
+          .then((state) => ({ state, error: null }))
+          .catch((error) => ({ state: defaultMarketApiState, error: getErrorMessage(error) })),
+      ])
 
       const nextLiveTeamForm = liveResults.reduce<Partial<Record<string, TeamLiveForm>>>((accumulator, item) => {
         if (item.liveForm) {
@@ -2064,10 +2553,36 @@ function App() {
           'No live team form was loaded. TheSportsDB may be unavailable, rate-limited, or some national-team names may not match the public dataset.',
         )
       }
+      setMarketApiState(marketResult.state)
+      setBackendConnectionStatus(marketResult.error ? 'offline' : 'online')
+      setRefreshFeedback({
+        kind: marketResult.error ? 'error' : 'success',
+        title: marketResult.error ? 'Refresh finished with problems.' : 'Refresh completed successfully.',
+        details: [
+          Object.keys(nextLiveTeamForm).length > 0
+            ? `Live team form updated for ${Object.keys(nextLiveTeamForm).length} of ${uniqueTeams.length} teams.`
+            : 'Live team form did not return any new team snapshots.',
+          marketResult.error
+            ? marketResult.error
+            : marketResult.state.marketStatus,
+          marketResult.state.actualResultStatus,
+          marketResult.state.stsStatus,
+        ],
+      })
     } finally {
       setIsRefreshingLiveData(false)
     }
-  }
+  }, [matches, resolvedKnockoutMatches])
+
+  useEffect(() => {
+    if (latestLiveRefresh && Date.now() - latestLiveRefresh < 1000 * 60 * 60 * 6) {
+      return
+    }
+
+    queueMicrotask(() => {
+      void handleRefreshLiveData()
+    })
+  }, [handleRefreshLiveData, latestLiveRefresh])
 
   function handleScrollToGroup(groupName: string) {
     setActiveView('group')
@@ -2078,6 +2593,74 @@ function App() {
     })
   }
 
+  function handleOpenSourcePicker(slotKey: BrokerSlotKey) {
+    setSourcePickerSlotKey(slotKey)
+  }
+
+  async function handleSelectBookmakerSource(sourceKey: BookmakerSourceKey) {
+    if (!sourcePickerSlotKey) {
+      return
+    }
+
+    setBackendConnectionStatus('checking')
+    const nextState = await updateBrokerSlotInBackend(sourcePickerSlotKey, sourceKey).catch(() => null)
+
+    if (nextState) {
+      setMarketApiState(nextState)
+      setBackendConnectionStatus('online')
+    } else {
+      setBackendConnectionStatus('offline')
+    }
+
+    setSourcePickerSlotKey(null)
+  }
+
+  async function handleSubmitOddsApiKey(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+
+    if (!oddsApiKeyInput.trim()) {
+      setOddsApiKeyStatus('Paste your Odds API key first.')
+      return
+    }
+
+    setBackendConnectionStatus('checking')
+    setOddsApiKeyStatus('Submitting key to the local backend...')
+
+    const nextState = await submitOddsApiKeyToBackend(oddsApiKeyInput).catch(() => null)
+
+    if (!nextState) {
+      setBackendConnectionStatus('offline')
+      setOddsApiKeyStatus('Could not submit the key. Make sure `npm run server` is running.')
+      return
+    }
+
+    setMarketApiState(nextState)
+    setBackendConnectionStatus('online')
+    setOddsApiKeyInput('')
+    setOddsApiKeyStatus('Key accepted for this backend session. Now run Refresh live data & odds.')
+  }
+
+  async function handleRefreshOddsApiUsage() {
+    setIsRefreshingOddsUsage(true)
+    setBackendConnectionStatus('checking')
+    setOddsApiKeyStatus('Refreshing Odds API credit counters...')
+
+    const nextState = await refreshOddsApiUsageInBackend().catch((error) => {
+      const message = getErrorMessage(error)
+      setOddsApiKeyStatus(message)
+      setBackendConnectionStatus(message.includes('Odds API key is missing') ? 'online' : 'offline')
+      return null
+    })
+
+    if (nextState) {
+      setMarketApiState(nextState)
+      setBackendConnectionStatus('online')
+      setOddsApiKeyStatus('Credit counters refreshed.')
+    }
+
+    setIsRefreshingOddsUsage(false)
+  }
+
   function handleTryToPredict(matchId: string) {
     setMatches((currentMatches) =>
       currentMatches.map((match) =>
@@ -2085,7 +2668,10 @@ function App() {
           ? (() => {
               const nextAttempt = (match.predictionAttempt ?? 0) + 1
               const groupState = getGroupStateContext(match, currentMatches)
-              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, { groupState })
+              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, {
+                groupState,
+                marketSignal: marketApiState.consensusByMatchId[match.id],
+              })
 
               return {
                 ...match,
@@ -2115,7 +2701,10 @@ function App() {
 
         const nextAttempt = (match.predictionAttempt ?? 0) + 1
         const groupState = getGroupStateContext(match, currentMatches)
-        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, { groupState })
+        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, {
+          groupState,
+          marketSignal: marketApiState.consensusByMatchId[match.id],
+        })
 
         return {
           ...match,
@@ -2316,13 +2905,18 @@ function App() {
                     }
                   : undefined,
                 liveTeamForm,
-                { knockout: true },
+                {
+                  knockout: true,
+                  marketSignal: marketApiState.consensusByMatchId[match.id],
+                },
               )
 
               return {
                 ...match,
                 predictionAttempt: nextAttempt,
                 manualEditorOpen: false,
+                lastResolvedHomeTeamId: resolvedMatch.homeTeam!.id,
+                lastResolvedAwayTeamId: resolvedMatch.awayTeam!.id,
                 prediction,
                 predictionHistory: appendHistory(match.predictionHistory, {
                   action: 'generated',
@@ -2339,11 +2933,15 @@ function App() {
   }
 
   function handleAcceptKnockout(matchId: string) {
+    const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === matchId)
+
     setKnockoutMatches((currentMatches) =>
       currentMatches.map((match) =>
         match.id === matchId && match.prediction
           ? {
               ...match,
+              lastResolvedHomeTeamId: resolvedMatch?.homeTeam?.id,
+              lastResolvedAwayTeamId: resolvedMatch?.awayTeam?.id,
               acceptedPrediction: match.prediction,
               predictionHistory: appendHistory(match.predictionHistory, {
                 action: 'accepted',
@@ -2463,9 +3061,13 @@ function App() {
           penaltyScore: homeGoals === awayGoals ? '4-3' : undefined,
         } satisfies Prediction
 
+        const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === matchId)
+
         return {
           ...match,
           manualEditorOpen: false,
+          lastResolvedHomeTeamId: resolvedMatch?.homeTeam?.id,
+          lastResolvedAwayTeamId: resolvedMatch?.awayTeam?.id,
           prediction,
           predictionHistory: appendHistory(match.predictionHistory, {
             action: 'manual',
@@ -2488,12 +3090,106 @@ function App() {
     setKnockoutMatches(createInitialKnockoutMatches())
     setActiveView('group')
     setLiveTeamForm({})
+    setMarketApiState(defaultMarketApiState)
+  }
+
+  function renderBookmakerStrip(matchId: string) {
+    const oddsBySource = marketApiState.oddsByMatchId[matchId] ?? {}
+    const brokerSlots = marketApiState.brokerSlots
+    const consensus = marketApiState.consensusByMatchId[matchId]
+
+    return (
+      <div className="bookmaker-box">
+        <div className="bookmaker-box-header">
+          <div>
+            <strong>Bookmaker market</strong>
+            <span>
+              Backend consensus for predictions:{' '}
+              {consensus ? `${consensus.sourceLabel} (${consensus.homeProbability}% / ${consensus.drawProbability}% / ${consensus.awayProbability}%)` : 'not loaded yet'}
+            </span>
+          </div>
+        </div>
+        <div className="bookmaker-grid">
+          {(Object.entries(brokerSlots) as Array<[BrokerSlotKey, BookmakerSourceKey]>).map(([slotKey, sourceKey], index) => {
+              const source = findBookmakerSource(sourceKey)
+              const snapshot = oddsBySource[sourceKey]
+
+              return (
+                <button
+                  key={slotKey}
+                  type="button"
+                  className={`bookmaker-card ${sourcePickerSlotKey === slotKey ? 'bookmaker-card-selected' : ''}`}
+                  onClick={() => handleOpenSourcePicker(slotKey)}
+                >
+                  <div className="bookmaker-card-top">
+                    <span className="bookmaker-brand-badge" style={{ backgroundColor: source.accent }}>
+                      {source.shortLabel}
+                    </span>
+                    <div className="bookmaker-card-title">
+                      <strong>Broker {index + 1}</strong>
+                      <span>{source.label}</span>
+                    </div>
+                  </div>
+                  {snapshot ? (
+                    <>
+                      <span className="bookmaker-odds-line">
+                        {snapshot.homeOdds} / {snapshot.drawOdds} / {snapshot.awayOdds}
+                      </span>
+                      <span className="bookmaker-probability-line">
+                        {snapshot.homeProbability}% / {snapshot.drawProbability}% / {snapshot.awayProbability}%
+                      </span>
+                    </>
+                  ) : (
+                    <span className="bookmaker-empty-copy">No data</span>
+                  )}
+                </button>
+              )
+            })}
+        </div>
+      </div>
+    )
+  }
+
+  function formatPredictionScore(prediction?: Prediction) {
+    if (!prediction) {
+      return ''
+    }
+
+    return `${prediction.homeGoals} : ${prediction.awayGoals}${prediction.knockoutResolution === 'extraTime' ? ' aet' : prediction.knockoutResolution === 'penalties' ? ` pens ${prediction.penaltyScore}` : ''}`
+  }
+
+  function formatActualResultScore(matchId: string) {
+    const actualResult = marketApiState.actualResultsByMatchId[matchId]
+
+    return actualResult ? `${actualResult.homeGoals} : ${actualResult.awayGoals}` : ''
+  }
+
+  function renderScoreComparison(matchId: string, prediction?: Prediction, acceptedPrediction?: Prediction) {
+    const actualResult = marketApiState.actualResultsByMatchId[matchId]
+
+    return (
+      <div className="score-comparison-grid">
+        <span className="score-comparison-item">
+          <span>Prediction</span>
+          <strong>{formatPredictionScore(prediction)}</strong>
+        </span>
+        <span className="score-comparison-item">
+          <span>Accepted</span>
+          <strong>{formatPredictionScore(acceptedPrediction)}</strong>
+        </span>
+        <span className={`score-comparison-item ${actualResult ? 'score-comparison-item-live' : ''}`}>
+          <span>Actual</span>
+          <strong>{formatActualResultScore(matchId)}</strong>
+          {actualResult?.sourceLabel ? <small>{actualResult.sourceLabel}</small> : null}
+        </span>
+      </div>
+    )
   }
 
   return (
     <main className="app-shell">
       <section className="hero-panel">
-        <div>
+        <div className="hero-copy-block">
           <p className="eyebrow">World Cup 2026 format</p>
           <h1>World Cup 2026 predictor rebuilt for 12 groups and a 32-team knockout stage</h1>
           <p className="hero-copy">
@@ -2515,22 +3211,115 @@ function App() {
             <span>Next product step</span>
             <strong>Poules-style picks</strong>
           </article>
-          <article>
-            <span>Live form refresh</span>
-            <strong>
-              {latestLiveRefresh
-                ? new Intl.DateTimeFormat('en-GB', {
-                    dateStyle: 'short',
-                    timeStyle: 'short',
-                    timeZone: viewerTimeZone,
-                  }).format(new Date(latestLiveRefresh))
-                : 'Not loaded yet'}
-            </strong>
+        </div>
+
+        <div className="hero-refresh-panel">
+          <article className={`hero-refresh-card hero-refresh-card-${refreshFeedback.kind}`}>
+            <div className="hero-refresh-meta">
+              <div>
+                <span>Backend connection</span>
+                <strong className={`backend-status-pill backend-status-pill-${backendConnectionStatus}`}>
+                  {backendConnectionStatus === 'checking'
+                    ? 'Checking...'
+                    : backendConnectionStatus === 'online'
+                      ? 'Online'
+                      : 'Offline'}
+                </strong>
+                <span className={`api-key-status ${marketApiState.apiKeyConfigured ? 'api-key-status-ready' : ''}`}>
+                  {marketApiState.apiKeyConfigured ? 'Odds API key active' : 'Odds API key missing'}
+                </span>
+              </div>
+              <div>
+                <span>Live form refresh</span>
+                <strong>
+                  {latestLiveRefresh
+                    ? new Intl.DateTimeFormat('en-GB', {
+                        dateStyle: 'short',
+                        timeStyle: 'short',
+                        timeZone: viewerTimeZone,
+                      }).format(new Date(latestLiveRefresh))
+                    : 'Not loaded yet'}
+                </strong>
+              </div>
+              <div>
+                <span>Market odds refresh</span>
+                <strong>
+                  {marketRefreshTimestamp
+                    ? new Intl.DateTimeFormat('en-GB', {
+                        dateStyle: 'short',
+                        timeStyle: 'short',
+                        timeZone: viewerTimeZone,
+                      }).format(new Date(marketRefreshTimestamp))
+                    : 'Not loaded yet'}
+                </strong>
+              </div>
+              <div>
+                <span>Real results refresh</span>
+                <strong>
+                  {actualResultsRefreshTimestamp
+                    ? new Intl.DateTimeFormat('en-GB', {
+                        dateStyle: 'short',
+                        timeStyle: 'short',
+                        timeZone: viewerTimeZone,
+                      }).format(new Date(actualResultsRefreshTimestamp))
+                    : 'Not loaded yet'}
+                </strong>
+              </div>
+            </div>
             <p className="hero-status-copy">{liveRefreshStatus}</p>
+            <p className="hero-status-copy">{marketApiState.marketStatus}</p>
+            <p className="hero-status-copy">{marketApiState.actualResultStatus}</p>
+            <p className="hero-status-copy">{marketApiState.stsStatus}</p>
+            <div className="odds-api-usage-box">
+              <div>
+                <span>Credits remaining</span>
+                <strong>{marketApiState.oddsApiUsage?.remaining ?? 'Unknown'}</strong>
+              </div>
+              <div>
+                <span>Credits used</span>
+                <strong>{marketApiState.oddsApiUsage?.used ?? 'Unknown'}</strong>
+              </div>
+              <div>
+                <span>Last refresh cost</span>
+                <strong>{marketApiState.oddsApiUsage?.last ?? 'Unknown'}</strong>
+              </div>
+              <button
+                type="button"
+                className="secondary-button compact-button odds-api-usage-button"
+                onClick={() => void handleRefreshOddsApiUsage()}
+                disabled={isRefreshingOddsUsage}
+              >
+                {isRefreshingOddsUsage ? 'Checking...' : 'Refresh credits'}
+              </button>
+            </div>
+            <form className="api-key-form" onSubmit={(event) => void handleSubmitOddsApiKey(event)}>
+              <label>
+                <span>The Odds API key</span>
+                <input
+                  type="password"
+                  value={oddsApiKeyInput}
+                  onChange={(event) => setOddsApiKeyInput(event.target.value)}
+                  placeholder="Paste your key"
+                  autoComplete="off"
+                />
+              </label>
+              <button type="submit" className="secondary-button compact-button">
+                Submit
+              </button>
+            </form>
+            <p className="hero-status-copy">{oddsApiKeyStatus}</p>
+            <div className="refresh-feedback-box">
+              <strong>{refreshFeedback.title}</strong>
+              <div className="refresh-feedback-list">
+                {refreshFeedback.details.map((detail) => (
+                  <span key={detail}>{detail}</span>
+                ))}
+              </div>
+            </div>
           </article>
           <div className="hero-button-stack">
             <button type="button" className="secondary-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
-              {isRefreshingLiveData ? 'Refreshing live data...' : 'Refresh live data'}
+              {isRefreshingLiveData ? 'Refreshing live data & odds...' : 'Refresh live data & odds'}
             </button>
             <button type="button" className="secondary-button" onClick={handleReset}>
               Reset simulation
@@ -2614,26 +3403,36 @@ function App() {
                       <tr>
                         <th>#</th>
                         <th>Team</th>
-                        <th>Pts</th>
-                        <th>GD</th>
-                        <th>P</th>
+                        <th>Pred Pts</th>
+                        <th>Pred GD</th>
+                        <th>Pred P</th>
+                        <th>Real Pts</th>
+                        <th>Real GD</th>
+                        <th>Real P</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {(standings[groupDefinition.name] ?? []).map((row, index) => (
-                        <tr key={row.team.id}>
-                          <td>{index + 1}</td>
-                          <td>
-                            <span className="table-team">
-                              <img className="team-flag" src={getFlagUrl(row.team)} alt={`Flag of ${row.team.name}`} />
-                              <span>{row.team.name}</span>
-                            </span>
-                          </td>
-                          <td>{row.points}</td>
-                          <td>{row.goalDifference}</td>
-                          <td>{row.played}</td>
-                        </tr>
-                      ))}
+                      {(standings[groupDefinition.name] ?? []).map((row, index) => {
+                        const actualRow = actualStandings[groupDefinition.name]?.find((standing) => standing.team.id === row.team.id)
+
+                        return (
+                          <tr key={row.team.id}>
+                            <td>{index + 1}</td>
+                            <td>
+                              <span className="table-team">
+                                <img className="team-flag" src={getFlagUrl(row.team)} alt={`Flag of ${row.team.name}`} />
+                                <span>{row.team.name}</span>
+                              </span>
+                            </td>
+                            <td>{row.points}</td>
+                            <td>{row.goalDifference}</td>
+                            <td>{row.played}</td>
+                            <td>{actualRow?.played ? actualRow.points : ''}</td>
+                            <td>{actualRow?.played ? actualRow.goalDifference : ''}</td>
+                            <td>{actualRow?.played ? actualRow.played : ''}</td>
+                          </tr>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </section>
@@ -2746,6 +3545,10 @@ function App() {
                               <span>rating {match.awayTeam.rating}</span>
                             </div>
                           </div>
+
+                          {renderScoreComparison(match.id, match.prediction, match.acceptedPrediction)}
+
+                          {renderBookmakerStrip(match.id)}
 
                       {match.prediction ? (
                         <div className="prediction-box">
@@ -2887,7 +3690,7 @@ function App() {
                     const match = resolvedMatch.match
                     const homeTeam = resolvedMatch.homeTeam
                     const awayTeam = resolvedMatch.awayTeam
-                    const canPredict = Boolean(homeTeam && awayTeam)
+                    const canPredict = Boolean(homeTeam && awayTeam && resolvedMatch.lockReasons.length === 0)
                     const scoreLabel = match.acceptedPrediction
                       ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}${match.acceptedPrediction.knockoutResolution === 'extraTime' ? ' aet' : match.acceptedPrediction.knockoutResolution === 'penalties' ? ` pens ${match.acceptedPrediction.penaltyScore}` : ''}`
                       : match.prediction
@@ -2951,9 +3754,24 @@ function App() {
                           </div>
                         </div>
 
+                        {renderScoreComparison(match.id, match.prediction, match.acceptedPrediction)}
+
+                        {homeTeam && awayTeam ? renderBookmakerStrip(match.id) : null}
+
                         {resolvedMatch.note ? (
                           <div className="prediction-box prediction-box-muted">
                             <p>{resolvedMatch.note}</p>
+                          </div>
+                        ) : null}
+
+                        {!canPredict && resolvedMatch.lockReasons.length > 0 ? (
+                          <div className="prediction-box prediction-box-muted">
+                            <p>Unlock requirements:</p>
+                            <ul className="lock-reason-list">
+                              {resolvedMatch.lockReasons.map((reason) => (
+                                <li key={reason}>{reason}</li>
+                              ))}
+                            </ul>
                           </div>
                         ) : null}
 
@@ -3060,6 +3878,40 @@ function App() {
           ))}
         </>
       )}
+
+      {sourcePickerSlotKey ? (
+        <div className="source-picker-overlay" role="presentation" onClick={() => setSourcePickerSlotKey(null)}>
+          <div className="source-picker-dialog" role="dialog" aria-modal="true" aria-label="Choose bookmaker source" onClick={(event) => event.stopPropagation()}>
+            <div className="source-picker-header">
+              <div>
+                <p className="eyebrow">Bookmaker source</p>
+                <h3>Choose the source for {sourcePickerSlotKey === 'broker1' ? 'Broker 1' : sourcePickerSlotKey === 'broker2' ? 'Broker 2' : 'Broker 3'}</h3>
+              </div>
+              <button type="button" className="secondary-button compact-button" onClick={() => setSourcePickerSlotKey(null)}>
+                Close
+              </button>
+            </div>
+            <div className="source-picker-grid">
+              {marketApiState.availableSources.map((source) => (
+                <button
+                  key={source.key}
+                  type="button"
+                  className={`source-picker-option ${marketApiState.brokerSlots[sourcePickerSlotKey] === source.key ? 'source-picker-option-active' : ''}`}
+                  onClick={() => void handleSelectBookmakerSource(source.key)}
+                >
+                  <span className="bookmaker-brand-badge" style={{ backgroundColor: source.accent }}>
+                    {source.shortLabel}
+                  </span>
+                  <strong>{source.label}</strong>
+                  <span>
+                    {source.note ?? 'Displayed in the UI through the backend broker slot mapping.'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   )
 }

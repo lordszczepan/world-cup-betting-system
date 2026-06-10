@@ -1,102 +1,71 @@
 # World Cup Betting System
 
-Browser app for simulating and predicting the `2026 FIFA World Cup` in its real tournament shape.
+Browser app for simulating, predicting and comparing `2026 FIFA World Cup` matches in the real tournament shape.
 
-## Current feature set
+The project is built as a hobby predictor. It is not betting advice and is not intended for commercial gambling use.
 
-- full `2026 World Cup` setup with `12 groups` from `A` to `L`
-- all `72` group-stage matches rendered in chronological group order
-- dedicated tabs for `Group Phase` and `Bracket Phase`
-- national flag graphics shown in groups, match cards and bracket slots
-- match cards with:
-  - teams
-  - stadium
-  - host city
-  - local kickoff time
-  - Polish kickoff time
-- automatic group tables updated from accepted results
-- automatic ranking of all third-placed teams
-- promotion of the best eight third-placed teams
-- official `Annex C` routing for the `Round of 32`
-- full knockout bracket from the `Round of 32` to the `Final` and `Third-place match`
-- per-match actions:
-  - `Try to predict`
-  - `Accept`
-  - `Reset`
-  - manual score entry
-- per-group actions:
-  - `Try to predict Group`
-  - `Accept All`
-- knockout matches can also be predicted and accepted all the way to the final
-- browser persistence through `localStorage` for:
-  - generated predictions
-  - accepted results
-  - knockout progression
-  - active tab
-  - live team-form snapshots
-  - prediction history
-- prediction history per match with overwrite tracking and confidence snapshot
-- collapsible match insight panels:
-  - `Why this prediction?`
-  - `Model inputs`
-  - `Prediction history`
-- `Refresh live data` flow that updates team-form inputs from internet data
+## Current Feature Set
 
-## Prediction engine
+- Full `2026 World Cup` setup with `12 groups` from `A` to `L`.
+- All `72` group-stage matches with teams, flags, stadium, host city, local kickoff time and viewer timezone kickoff time.
+- Dedicated tabs for `Group Phase` and `Bracket Phase`.
+- Group tables updated from accepted predictions.
+- Side-by-side predicted, accepted and real-score views in match cards.
+- Side-by-side predicted and real group-table columns.
+- Real completed results support through the backend refresh flow when score data is available.
+- Best third-place ranking for the `8` promoted third-placed teams.
+- Official `Annex C` routing support for Round of 32 third-place assignments.
+- Full knockout bracket from `Round of 32` through `Round of 16`, quarter-finals, semi-finals, third-place match and final.
+- Knockout unlock diagnostics that explain why a match cannot be predicted yet.
+- Per-match actions: `Try to predict`, `Accept`, `Reset` and manual score entry.
+- Per-group actions: `Try to predict Group` and `Accept All`.
+- Browser persistence through `localStorage` for predictions, accepted results, bracket progression, active tab, live form and prediction history.
+- Backend-backed market odds layer with selectable broker slots.
+- The Odds API key entry in the UI, kept in the running local backend session instead of being hardcoded.
+- Odds API credit counters with a separate `Refresh credits` action.
+- STS adapter support for mapped markets, with `No data` shown when a broker has no odds for a match.
 
-The current model is still a hobby model, but it already uses several layers instead of a single rating number.
+## Prediction Engine
 
-- seeded team strength and rating baseline
-- expected-goals style scoring model
-- Poisson score distribution for match outcome generation
-- team-profile inputs:
-  - chance creation
-  - finishing
-  - defensive shape
-  - set pieces
-  - tournament experience
-- recent-team signals:
-  - points per match
-  - goals scored per match
-  - goals conceded per match
-  - clean-sheet rate
-  - injury burden
-- venue context:
-  - neutral-match assumption for most games
-  - host-country advantage only when relevant
-  - altitude effect for higher Mexican venues
-- schedule context:
-  - rest days
-  - travel distance between host cities
-- knockout resolution logic:
-  - regular time
-  - extra time
-  - penalties
-- group-state logic:
-  - current table position before the match
-  - current points before the match
-  - motivation boost when a team still needs points
-  - rotation risk when a team is already close to secure qualification
-  - draw-tolerance effect when a draw may already be useful
+The model is heuristic, but it combines multiple inputs instead of relying on one rating value.
 
-## Match explanations
+- Seeded team strength and rating baseline.
+- Expected-goals style score projection.
+- Poisson score distribution for outcome generation.
+- Team-profile inputs: chance creation, finishing, defensive shape, set pieces and tournament experience.
+- Recent-team signals: points per match, goals scored, goals conceded, clean-sheet rate and injury burden.
+- Venue context: neutral-match assumption, host-country advantage where relevant and altitude effect for higher Mexican venues.
+- Schedule context: rest days and travel distance between host cities.
+- Group-state logic: current points, current group position, motivation boost, rotation risk and draw-tolerance effects.
+- Knockout logic: regular-time wins, extra time and penalties.
+- Market signal blending when trusted bookmaker odds are available.
 
-Each generated prediction exposes:
+Each generated prediction exposes the predicted score, win/draw/loss probabilities, expected goals, model strength, confidence, model inputs, factor breakdown and prediction history.
 
-- the predicted score
-- win / draw / loss probabilities
-- expected goals for both teams
-- model strength
-- confidence percentage
-- factor breakdown showing which model inputs moved the prediction
-- input snapshot showing the concrete data used for that run
-- prediction history showing regenerated, accepted, manual and reset states
+## Live Data And Backend
 
-## Run locally
+The app has a local backend used for market odds, API-key handling and real completed scores.
+
+- `Refresh live data & odds` refreshes public recent-team form, bookmaker market odds and real completed scores.
+- `Backend connection` shows whether the local backend is reachable.
+- `The Odds API key` can be submitted in the browser. It is stored only in the running backend process.
+- `Refresh credits` checks Odds API credit headers without downloading odds for all matches again.
+- Runtime market state is written under `server/data/`, which is intentionally ignored by git.
+
+Real results stay empty until a provider returns completed World Cup fixtures matching the current schedule.
+
+## Run Locally
+
+Install dependencies:
 
 ```bash
 npm install
-npm run dev
+```
+
+Run frontend and backend together:
+
+```bash
+npm run dev:all
 ```
 
 Then open the local Vite address shown in the terminal, usually:
@@ -105,26 +74,46 @@ Then open the local Vite address shown in the terminal, usually:
 http://localhost:5173
 ```
 
-## Tech stack
+You can also run them separately:
+
+```bash
+npm run server
+npm run dev
+```
+
+## Environment
+
+Create a local `.env` file if you want to start the backend with an API key already loaded:
+
+```bash
+THE_ODDS_API_KEY=your_the_odds_api_key_here
+BACKEND_PORT=8787
+```
+
+Do not commit real API keys. Use `.env.example` as the shared template.
+
+## Tech Stack
 
 - `React`
 - `TypeScript`
 - `Vite`
+- `Express`
 - browser `localStorage`
+- local backend JSON state
 
-## Current limitations
+## Current Limitations
 
-- live data refresh uses lightweight public football data, not a full official or premium data feed
-- the model is still heuristic and not trained on a large historical World Cup dataset
-- group-state logic is simplified and does not yet model full squad-rotation probability trees
-- knockout fatigue and travel are modeled from the current tournament schedule layer, but not from deeper player-level workload data
-- there is no multi-user backend or shared database yet
-- there is no Poules-style scoring game layer yet
+- Real odds and scores depend on external provider availability, matching quality and API limits.
+- STS support is currently adapter-based and only works reliably for mapped markets.
+- The model is still heuristic and not trained on a large historical World Cup dataset.
+- Injury, lineup and rotation inputs are simplified.
+- There is no multi-user backend or shared database yet.
+- There is no Poules-style scoring game layer yet.
 
-## Next improvements
+## Next Improvements
 
-1. add stronger live and historical data sources for rankings, results and injuries
-2. add a Poules-style points system for exact score picks and bracket scoring
-3. allow saving and comparing multiple tournament scenarios
-4. add richer tactical context such as stronger draw management and likely line-up rotation
-5. move persistence from local browser storage to a backend when shared usage becomes useful
+1. Add stronger official or premium data feeds for results, injuries, rankings and lineups.
+2. Add Poules-style scoring for exact-score picks and bracket points.
+3. Add scenario comparison for multiple saved tournament simulations.
+4. Improve STS and Polish bookmaker adapters.
+5. Move persistence from local browser storage to a shared backend when multiplayer usage becomes useful.
