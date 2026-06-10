@@ -50,6 +50,11 @@
   align-content: start;
 }
 
+.hero-button-stack {
+  display: grid;
+  gap: 10px;
+}
+
 .hero-stats article {
   padding: 16px 18px;
   border-radius: 20px;
@@ -254,6 +259,12 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.knockout-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
 .team-name,
 .table-team {
   display: inline-flex;
@@ -269,6 +280,11 @@
   border: 1px solid rgba(8, 28, 54, 0.12);
   flex-shrink: 0;
   background: white;
+}
+
+.team-flag-placeholder {
+  display: inline-block;
+  background: rgba(8, 28, 54, 0.08);
 }
 
 .table-team {
@@ -318,6 +334,16 @@
 .prediction-box-muted {
   background: rgba(8, 28, 54, 0.04);
   border-color: rgba(8, 28, 54, 0.08);
+}
+
+.knockout-slot-box {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .manual-entry-box {
@@ -481,6 +507,10 @@ tbody tr:last-child td {
   }
 
   .match-list {
+    grid-template-columns: 1fr;
+  }
+
+  .knockout-stage-grid {
     grid-template-columns: 1fr;
   }
 

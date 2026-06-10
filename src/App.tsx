@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import './App.css'
+import { getAnnexCAssignment } from './annexC'
 
 type ViewMode = 'group' | 'bracket'
 
@@ -10,6 +11,14 @@ type TeamModelProfile = {
   setPieces: number
   tournamentExperience: number
   volatility: number
+}
+
+type TeamRecentData = {
+  lastFivePointsPerMatch: number
+  goalsForPerMatch: number
+  goalsAgainstPerMatch: number
+  cleanSheetRate: number
+  injuryBurden: number
 }
 
 type Team = {
@@ -50,7 +59,12 @@ type Match = {
   polishDateLabel: string
   polishTimeLabel: string
   venueCity: string
+  venueCountryCode: 'MX' | 'CA' | 'US'
   stadium: string
+  restDaysHome: number
+  restDaysAway: number
+  travelKmHome: number
+  travelKmAway: number
   homeTeam: Team
   awayTeam: Team
   predictionAttempt?: number
@@ -84,6 +98,34 @@ type RoundOf32Match = {
   awaySlot: string
   homeTeam: string
   awayTeam: string
+  routingMode: 'official' | 'provisional'
+  note?: string
+}
+
+type KnockoutStage = 'roundOf32' | 'roundOf16' | 'quarterFinals' | 'semiFinals' | 'thirdPlace' | 'final'
+
+type KnockoutMatch = {
+  id: string
+  label: string
+  stage: KnockoutStage
+  homeSlot: string
+  awaySlot: string
+  predictionAttempt?: number
+  manualEditorOpen?: boolean
+  manualHomeGoals?: string
+  manualAwayGoals?: string
+  prediction?: Prediction
+  acceptedPrediction?: Prediction
+  lastResolvedHomeTeamId?: string
+  lastResolvedAwayTeamId?: string
+}
+
+type ResolvedKnockoutMatch = {
+  match: KnockoutMatch
+  homeTeam: Team | null
+  awayTeam: Team | null
+  displayHomeSlot: string
+  displayAwaySlot: string
   note?: string
 }
 
@@ -98,6 +140,8 @@ type VenueMeta = {
   countryCode: 'MX' | 'CA' | 'US'
   timeZone: string
   altitudeMeters: number
+  latitude: number
+  longitude: number
 }
 
 const groupDefinitions: GroupDefinition[] = [
@@ -320,22 +364,22 @@ const groupScheduleSource: Record<string, RawScheduleItem[]> = {
 }
 
 const venueMetaByCity: Record<string, VenueMeta> = {
-  'Mexico City': { countryCode: 'MX', timeZone: 'America/Mexico_City', altitudeMeters: 2240 },
-  Guadalajara: { countryCode: 'MX', timeZone: 'America/Mexico_City', altitudeMeters: 1560 },
-  Monterrey: { countryCode: 'MX', timeZone: 'America/Monterrey', altitudeMeters: 540 },
-  Atlanta: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 320 },
-  Toronto: { countryCode: 'CA', timeZone: 'America/Toronto', altitudeMeters: 75 },
-  'San Francisco Bay Area': { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 15 },
-  'Los Angeles': { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 90 },
-  Vancouver: { countryCode: 'CA', timeZone: 'America/Vancouver', altitudeMeters: 70 },
-  Seattle: { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 50 },
-  'New York/New Jersey': { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 5 },
-  Boston: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 45 },
-  Philadelphia: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 12 },
-  Miami: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 2 },
-  Houston: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 13 },
-  'Kansas City': { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 270 },
-  Dallas: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 131 },
+  'Mexico City': { countryCode: 'MX', timeZone: 'America/Mexico_City', altitudeMeters: 2240, latitude: 19.4326, longitude: -99.1332 },
+  Guadalajara: { countryCode: 'MX', timeZone: 'America/Mexico_City', altitudeMeters: 1560, latitude: 20.6597, longitude: -103.3496 },
+  Monterrey: { countryCode: 'MX', timeZone: 'America/Monterrey', altitudeMeters: 540, latitude: 25.6866, longitude: -100.3161 },
+  Atlanta: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 320, latitude: 33.749, longitude: -84.388 },
+  Toronto: { countryCode: 'CA', timeZone: 'America/Toronto', altitudeMeters: 75, latitude: 43.6532, longitude: -79.3832 },
+  'San Francisco Bay Area': { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 15, latitude: 37.3382, longitude: -121.8863 },
+  'Los Angeles': { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 90, latitude: 34.0522, longitude: -118.2437 },
+  Vancouver: { countryCode: 'CA', timeZone: 'America/Vancouver', altitudeMeters: 70, latitude: 49.2827, longitude: -123.1207 },
+  Seattle: { countryCode: 'US', timeZone: 'America/Los_Angeles', altitudeMeters: 50, latitude: 47.6062, longitude: -122.3321 },
+  'New York/New Jersey': { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 5, latitude: 40.7128, longitude: -74.006 },
+  Boston: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 45, latitude: 42.3601, longitude: -71.0589 },
+  Philadelphia: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 12, latitude: 39.9526, longitude: -75.1652 },
+  Miami: { countryCode: 'US', timeZone: 'America/New_York', altitudeMeters: 2, latitude: 25.7617, longitude: -80.1918 },
+  Houston: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 13, latitude: 29.7604, longitude: -95.3698 },
+  'Kansas City': { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 270, latitude: 39.0997, longitude: -94.5786 },
+  Dallas: { countryCode: 'US', timeZone: 'America/Chicago', altitudeMeters: 131, latitude: 32.7767, longitude: -96.797 },
 }
 
 const teamProfileOverrides: Partial<Record<string, Partial<TeamModelProfile>>> = {
@@ -358,6 +402,24 @@ const teamProfileOverrides: Partial<Record<string, Partial<TeamModelProfile>>> =
   sen: { chanceCreation: 1.07, finishing: 1.05, defensiveShape: 1.08, setPieces: 1.05, tournamentExperience: 1.02 },
   sui: { chanceCreation: 1.02, finishing: 1.0, defensiveShape: 1.07, setPieces: 1.03, tournamentExperience: 1.04, volatility: 0.95 },
   ecu: { chanceCreation: 1.04, finishing: 1.0, defensiveShape: 1.04, setPieces: 1.02, tournamentExperience: 0.98, volatility: 0.97 },
+}
+
+const teamRecentDataOverrides: Partial<Record<string, Partial<TeamRecentData>>> = {
+  arg: { lastFivePointsPerMatch: 2.4, goalsForPerMatch: 2.2, goalsAgainstPerMatch: 0.6, cleanSheetRate: 0.6, injuryBurden: 0.06 },
+  bra: { lastFivePointsPerMatch: 2.2, goalsForPerMatch: 2.1, goalsAgainstPerMatch: 0.7, cleanSheetRate: 0.52, injuryBurden: 0.08 },
+  esp: { lastFivePointsPerMatch: 2.3, goalsForPerMatch: 2.0, goalsAgainstPerMatch: 0.7, cleanSheetRate: 0.56, injuryBurden: 0.05 },
+  fra: { lastFivePointsPerMatch: 2.2, goalsForPerMatch: 1.9, goalsAgainstPerMatch: 0.8, cleanSheetRate: 0.5, injuryBurden: 0.09 },
+  ger: { lastFivePointsPerMatch: 2.0, goalsForPerMatch: 1.8, goalsAgainstPerMatch: 0.9, cleanSheetRate: 0.44, injuryBurden: 0.08 },
+  por: { lastFivePointsPerMatch: 2.1, goalsForPerMatch: 1.9, goalsAgainstPerMatch: 0.8, cleanSheetRate: 0.48, injuryBurden: 0.06 },
+  eng: { lastFivePointsPerMatch: 2.2, goalsForPerMatch: 1.95, goalsAgainstPerMatch: 0.85, cleanSheetRate: 0.46, injuryBurden: 0.07 },
+  usa: { lastFivePointsPerMatch: 1.7, goalsForPerMatch: 1.45, goalsAgainstPerMatch: 1.1, cleanSheetRate: 0.28, injuryBurden: 0.11 },
+  mex: { lastFivePointsPerMatch: 1.6, goalsForPerMatch: 1.35, goalsAgainstPerMatch: 1.0, cleanSheetRate: 0.32, injuryBurden: 0.08 },
+  can: { lastFivePointsPerMatch: 1.6, goalsForPerMatch: 1.4, goalsAgainstPerMatch: 1.2, cleanSheetRate: 0.25, injuryBurden: 0.09 },
+  mar: { lastFivePointsPerMatch: 1.95, goalsForPerMatch: 1.5, goalsAgainstPerMatch: 0.8, cleanSheetRate: 0.46, injuryBurden: 0.05 },
+  uru: { lastFivePointsPerMatch: 1.9, goalsForPerMatch: 1.55, goalsAgainstPerMatch: 0.85, cleanSheetRate: 0.42, injuryBurden: 0.06 },
+  col: { lastFivePointsPerMatch: 2.0, goalsForPerMatch: 1.65, goalsAgainstPerMatch: 0.8, cleanSheetRate: 0.45, injuryBurden: 0.05 },
+  jpn: { lastFivePointsPerMatch: 1.95, goalsForPerMatch: 1.7, goalsAgainstPerMatch: 0.9, cleanSheetRate: 0.38, injuryBurden: 0.05 },
+  sen: { lastFivePointsPerMatch: 1.8, goalsForPerMatch: 1.55, goalsAgainstPerMatch: 0.9, cleanSheetRate: 0.35, injuryBurden: 0.07 },
 }
 
 const fixedRoundOf32Rules = [
@@ -408,6 +470,64 @@ const knockoutPath = {
     ['104', 'W101', 'W102', 'Final'],
   ],
 }
+
+const storageKeys = {
+  groupMatches: 'world-cup-betting-system/group-matches',
+  knockoutMatches: 'world-cup-betting-system/knockout-matches',
+  activeView: 'world-cup-betting-system/active-view',
+} as const
+
+const knockoutMatchTemplates: Omit<KnockoutMatch, 'prediction' | 'acceptedPrediction'>[] = [
+  ...fixedRoundOf32Rules.map(([id, homeSlot, awaySlot]) => ({
+    id,
+    label: `Match ${id}`,
+    stage: 'roundOf32' as const,
+    homeSlot,
+    awaySlot,
+  })),
+  ...wildcardRoundOf32Rules.map(([id, homeSlot, allowedGroups]) => ({
+    id,
+    label: `Match ${id}`,
+    stage: 'roundOf32' as const,
+    homeSlot,
+    awaySlot: `3${allowedGroups.join('/')}`,
+  })),
+  ...knockoutPath.roundOf16.map(([id, homeSlot, awaySlot]) => ({
+    id,
+    label: `Match ${id}`,
+    stage: 'roundOf16' as const,
+    homeSlot,
+    awaySlot,
+  })),
+  ...knockoutPath.quarterFinals.map(([id, homeSlot, awaySlot]) => ({
+    id,
+    label: `Match ${id}`,
+    stage: 'quarterFinals' as const,
+    homeSlot,
+    awaySlot,
+  })),
+  ...knockoutPath.semiFinals.map(([id, homeSlot, awaySlot]) => ({
+    id,
+    label: `Match ${id}`,
+    stage: 'semiFinals' as const,
+    homeSlot,
+    awaySlot,
+  })),
+  {
+    id: '103',
+    label: 'Third-place match',
+    stage: 'thirdPlace' as const,
+    homeSlot: 'L101',
+    awaySlot: 'L102',
+  },
+  {
+    id: '104',
+    label: 'Final',
+    stage: 'final' as const,
+    homeSlot: 'W101',
+    awaySlot: 'W102',
+  },
+]
 
 function parseEtDateTime(dateLabel: string, etLabel: string) {
   const monthMap: Record<string, number> = {
@@ -476,14 +596,44 @@ function getFlagUrl(team: Team) {
 }
 
 function createInitialMatches(): Match[] {
-  return groupDefinitions.flatMap((groupDefinition) =>
-    groupMatchTemplate.map(([homeIndex, awayIndex, kickoffLabel], roundIndex) => {
+  return groupDefinitions.flatMap((groupDefinition) => {
+    const lastAppearanceByTeam = new Map<string, { kickoff: Date; venueCity: string }>()
+
+    return groupMatchTemplate.map(([homeIndex, awayIndex, kickoffLabel], roundIndex) => {
       const scheduleItem = groupScheduleSource[groupDefinition.name][roundIndex]
       const kickoff = parseEtDateTime(scheduleItem.date, scheduleItem.et)
       const [venueCity, stadium] = scheduleItem.venue.split('|').map((part) => part.trim())
-      const localTimeZone = venueMetaByCity[venueCity]?.timeZone ?? 'UTC'
+      const venueMeta = venueMetaByCity[venueCity]
+      const localTimeZone = venueMeta?.timeZone ?? 'UTC'
       const localDateTime = formatDateTime(kickoff, localTimeZone)
       const polishDateTime = formatDateTime(kickoff, 'Europe/Warsaw')
+      const homeTeam = groupDefinition.teams[homeIndex]
+      const awayTeam = groupDefinition.teams[awayIndex]
+      const previousHomeAppearance = lastAppearanceByTeam.get(homeTeam.id)
+      const previousAwayAppearance = lastAppearanceByTeam.get(awayTeam.id)
+      const restDaysHome = previousHomeAppearance
+        ? roundTo((kickoff.getTime() - previousHomeAppearance.kickoff.getTime()) / (1000 * 60 * 60 * 24), 1)
+        : 7
+      const restDaysAway = previousAwayAppearance
+        ? roundTo((kickoff.getTime() - previousAwayAppearance.kickoff.getTime()) / (1000 * 60 * 60 * 24), 1)
+        : 7
+      const previousHomeVenue = previousHomeAppearance ? venueMetaByCity[previousHomeAppearance.venueCity] : null
+      const previousAwayVenue = previousAwayAppearance ? venueMetaByCity[previousAwayAppearance.venueCity] : null
+      const travelKmHome =
+        previousHomeVenue && venueMeta
+          ? Math.round(
+              calculateDistanceKm(previousHomeVenue.latitude, previousHomeVenue.longitude, venueMeta.latitude, venueMeta.longitude),
+            )
+          : 0
+      const travelKmAway =
+        previousAwayVenue && venueMeta
+          ? Math.round(
+              calculateDistanceKm(previousAwayVenue.latitude, previousAwayVenue.longitude, venueMeta.latitude, venueMeta.longitude),
+            )
+          : 0
+
+      lastAppearanceByTeam.set(homeTeam.id, { kickoff, venueCity })
+      lastAppearanceByTeam.set(awayTeam.id, { kickoff, venueCity })
 
       return {
         id: `${groupDefinition.name}-${roundIndex + 1}`,
@@ -496,12 +646,99 @@ function createInitialMatches(): Match[] {
         polishDateLabel: polishDateTime.dateLabel,
         polishTimeLabel: polishDateTime.timeLabel,
         venueCity,
+        venueCountryCode: venueMeta?.countryCode ?? 'US',
         stadium,
-        homeTeam: groupDefinition.teams[homeIndex],
-        awayTeam: groupDefinition.teams[awayIndex],
+        restDaysHome,
+        restDaysAway,
+        travelKmHome,
+        travelKmAway,
+        homeTeam,
+        awayTeam,
       }
-    }),
-  )
+    })
+  })
+}
+
+function createInitialKnockoutMatches(): KnockoutMatch[] {
+  return knockoutMatchTemplates.map((match) => ({
+    ...match,
+    predictionAttempt: 0,
+    manualEditorOpen: false,
+    manualHomeGoals: '',
+    manualAwayGoals: '',
+  }))
+}
+
+function loadStoredState<T>(storageKey: string) {
+  if (typeof window === 'undefined') {
+    return null as T | null
+  }
+
+  const rawValue = window.localStorage.getItem(storageKey)
+
+  if (!rawValue) {
+    return null as T | null
+  }
+
+  try {
+    return JSON.parse(rawValue) as T
+  } catch {
+    return null as T | null
+  }
+}
+
+function mergeStoredGroupMatches(storedMatches: Match[] | null) {
+  const freshMatches = createInitialMatches()
+
+  if (!storedMatches) {
+    return freshMatches
+  }
+
+  const storedById = new Map(storedMatches.map((match) => [match.id, match]))
+
+  return freshMatches.map((match) => {
+    const storedMatch = storedById.get(match.id)
+
+    return storedMatch
+      ? {
+          ...match,
+          predictionAttempt: storedMatch.predictionAttempt ?? 0,
+          manualEditorOpen: storedMatch.manualEditorOpen ?? false,
+          manualHomeGoals: storedMatch.manualHomeGoals ?? '',
+          manualAwayGoals: storedMatch.manualAwayGoals ?? '',
+          prediction: storedMatch.prediction,
+          acceptedPrediction: storedMatch.acceptedPrediction,
+        }
+      : match
+  })
+}
+
+function mergeStoredKnockoutMatches(storedMatches: KnockoutMatch[] | null) {
+  const freshMatches = createInitialKnockoutMatches()
+
+  if (!storedMatches) {
+    return freshMatches
+  }
+
+  const storedById = new Map(storedMatches.map((match) => [match.id, match]))
+
+  return freshMatches.map((match) => {
+    const storedMatch = storedById.get(match.id)
+
+    return storedMatch
+      ? {
+          ...match,
+          predictionAttempt: storedMatch.predictionAttempt ?? 0,
+          manualEditorOpen: storedMatch.manualEditorOpen ?? false,
+          manualHomeGoals: storedMatch.manualHomeGoals ?? '',
+          manualAwayGoals: storedMatch.manualAwayGoals ?? '',
+          prediction: storedMatch.prediction,
+          acceptedPrediction: storedMatch.acceptedPrediction,
+          lastResolvedHomeTeamId: storedMatch.lastResolvedHomeTeamId,
+          lastResolvedAwayTeamId: storedMatch.lastResolvedAwayTeamId,
+        }
+      : match
+  })
 }
 
 function teamHash(team: Team) {
@@ -515,6 +752,61 @@ function clamp(value: number, min: number, max: number) {
 function roundTo(value: number, digits: number) {
   const factor = 10 ** digits
   return Math.round(value * factor) / factor
+}
+
+function getTeamRecentData(team: Team): TeamRecentData {
+  const ratingBase = (team.rating - 70) / 20
+  const hashBase = teamHash(team)
+  const overrides = teamRecentDataOverrides[team.id]
+
+  return {
+    lastFivePointsPerMatch: overrides?.lastFivePointsPerMatch ?? clamp(1.15 + ratingBase * 0.5 + (hashBase % 5) * 0.07, 0.8, 2.4),
+    goalsForPerMatch: overrides?.goalsForPerMatch ?? clamp(1 + ratingBase * 0.42 + ((hashBase * 3) % 5) * 0.08, 0.7, 2.3),
+    goalsAgainstPerMatch:
+      overrides?.goalsAgainstPerMatch ?? clamp(1.35 - ratingBase * 0.26 + ((hashBase * 5) % 4) * 0.06, 0.55, 1.8),
+    cleanSheetRate: overrides?.cleanSheetRate ?? clamp(0.18 + ratingBase * 0.12 + ((hashBase * 7) % 4) * 0.04, 0.1, 0.62),
+    injuryBurden: overrides?.injuryBurden ?? clamp(0.05 + ((hashBase * 11) % 6) * 0.015, 0.04, 0.16),
+  }
+}
+
+function calculateDistanceKm(fromLatitude: number, fromLongitude: number, toLatitude: number, toLongitude: number) {
+  const earthRadiusKm = 6371
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180
+  const latitudeDelta = toRadians(toLatitude - fromLatitude)
+  const longitudeDelta = toRadians(toLongitude - fromLongitude)
+  const a =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(toRadians(fromLatitude)) * Math.cos(toRadians(toLatitude)) * Math.sin(longitudeDelta / 2) ** 2
+
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function getRestImpact(restDays: number) {
+  if (restDays >= 6) {
+    return 0.04
+  }
+
+  if (restDays >= 4) {
+    return 0
+  }
+
+  return -0.05
+}
+
+function getTravelImpact(travelKm: number) {
+  if (travelKm <= 400) {
+    return 0.02
+  }
+
+  if (travelKm <= 1400) {
+    return 0
+  }
+
+  if (travelKm <= 2600) {
+    return -0.03
+  }
+
+  return -0.06
 }
 
 function getAttackStrength(team: Team) {
@@ -603,7 +895,13 @@ function poissonProbability(goals: number, lambda: number) {
   return (Math.exp(-lambda) * lambda ** goals) / factorial
 }
 
-function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt = 0): Prediction {
+function predictMatch(
+  homeTeam: Team,
+  awayTeam: Team,
+  venueCity: string,
+  attempt = 0,
+  context?: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'>,
+): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
   const homeAttack = getAttackStrength(homeTeam)
   const awayAttack = getAttackStrength(awayTeam)
@@ -611,6 +909,8 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
   const awayDefense = getDefenseStrength(awayTeam)
   const homeProfile = getTeamModelProfile(homeTeam)
   const awayProfile = getTeamModelProfile(awayTeam)
+  const homeRecent = getTeamRecentData(homeTeam)
+  const awayRecent = getTeamRecentData(awayTeam)
   const formSwing = getFormFactor(homeTeam, attempt) - getFormFactor(awayTeam, attempt)
   const homeHostBoost = getHostVenueBoost(homeTeam, venueCity)
   const awayHostBoost = getHostVenueBoost(awayTeam, venueCity)
@@ -621,12 +921,26 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
   const defensiveSwing = homeProfile.defensiveShape - awayProfile.defensiveShape
   const setPieceSwing = homeProfile.setPieces - awayProfile.setPieces
   const experienceSwing = homeProfile.tournamentExperience - awayProfile.tournamentExperience
+  const recentFormSwing = (homeRecent.lastFivePointsPerMatch - awayRecent.lastFivePointsPerMatch) * 0.06
+  const scoringSwing = (homeRecent.goalsForPerMatch - awayRecent.goalsForPerMatch) * 0.08
+  const defensiveRecordSwing = (awayRecent.goalsAgainstPerMatch - homeRecent.goalsAgainstPerMatch) * 0.06
+  const cleanSheetSwing = (homeRecent.cleanSheetRate - awayRecent.cleanSheetRate) * 0.08
+  const injurySwing = (awayRecent.injuryBurden - homeRecent.injuryBurden) * 0.2
+  const restSwing = getRestImpact(context?.restDaysHome ?? 5) - getRestImpact(context?.restDaysAway ?? 5)
+  const travelSwing = getTravelImpact(context?.travelKmHome ?? 0) - getTravelImpact(context?.travelKmAway ?? 0)
   const homeExpectedGoals = clamp(
     1.18 +
       homeAttack * 0.62 -
       awayDefense * 0.33 +
       ratingGap / 90 +
       formSwing +
+      recentFormSwing +
+      scoringSwing +
+      defensiveRecordSwing +
+      cleanSheetSwing +
+      injurySwing +
+      restSwing +
+      travelSwing +
       creationSwing * 0.18 +
       finishingSwing * 0.12 +
       setPieceSwing * 0.08 +
@@ -644,6 +958,13 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
       homeDefense * 0.31 -
       ratingGap / 105 -
       formSwing * 0.7 +
+      recentFormSwing * -0.85 +
+      scoringSwing * -0.85 +
+      defensiveRecordSwing * -0.85 +
+      cleanSheetSwing * -0.9 +
+      injurySwing * -0.95 +
+      restSwing * -0.95 +
+      travelSwing * -0.95 +
       (awayProfile.chanceCreation - homeProfile.chanceCreation) * 0.17 +
       (awayProfile.finishing - homeProfile.finishing) * 0.12 +
       (awayProfile.setPieces - homeProfile.setPieces) * 0.08 +
@@ -695,7 +1016,8 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
       58 +
         Math.abs(ratingGap) * 0.45 +
         Math.abs(creationSwing + finishingSwing + defensiveSwing + experienceSwing) * 14 +
-        Math.abs(homeHostBoost - awayHostBoost) * 20,
+        Math.abs(homeHostBoost - awayHostBoost) * 20 +
+        Math.abs(recentFormSwing + scoringSwing + injurySwing + restSwing + travelSwing) * 18,
     ),
     50,
     94,
@@ -717,6 +1039,10 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
     Math.abs(creationSwing) + Math.abs(finishingSwing) + Math.abs(defensiveSwing) > 0.2
       ? 'Team-profile factors such as chance creation, finishing and defensive shape are included.'
       : 'The team-profile layer sees these squads as relatively balanced.'
+  const scheduleContextSummary =
+    context
+      ? 'Recent form, rest windows and inter-city travel are also included.'
+      : 'The schedule layer is using neutral knockout assumptions for now.'
 
   return {
     homeGoals,
@@ -730,8 +1056,8 @@ function predictMatch(homeTeam: Team, awayTeam: Team, venueCity: string, attempt
     modelStrength,
     summary:
       attempt > 0
-        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary}`
-        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary}`,
+        ? `${outcome}. This refreshed model run uses probabilistic xG, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary}`
+        : `${outcome}. This version uses expected goals, Poisson score distribution, venue context and team-profile inputs. ${venueContextSummary} ${styleContextSummary} ${scheduleContextSummary}`,
   }
 }
 
@@ -831,7 +1157,8 @@ function createPositionMap(standings: Record<string, Standing[]>) {
 function buildRoundOf32(standings: Record<string, Standing[]>, rankedThirds: RankedThird[]) {
   const positionMap = createPositionMap(standings)
   const qualifiedThirds = rankedThirds.slice(0, 8)
-  const usedThirdTeamIds = new Set<string>()
+  const annexCAssignment = getAnnexCAssignment(qualifiedThirds.map((standing) => standing.team.group))
+  const qualifiedThirdMap = new Map(qualifiedThirds.map((standing) => [`3${standing.team.group}`, standing]))
 
   const fixedMatches: RoundOf32Match[] = fixedRoundOf32Rules.map(([id, homeSlot, awaySlot]) => ({
     id,
@@ -840,43 +1167,227 @@ function buildRoundOf32(standings: Record<string, Standing[]>, rankedThirds: Ran
     awaySlot,
     homeTeam: positionMap.get(homeSlot)?.team.name ?? 'TBD',
     awayTeam: positionMap.get(awaySlot)?.team.name ?? 'TBD',
+    routingMode: 'official',
   }))
 
-  // FIFA uses Annex C for the exact 3rd-place routing. This is a valid provisional assignment layer
-  // that keeps the official 2026 slot families while we prepare the exact matrix.
-  const wildcardMatches: RoundOf32Match[] = wildcardRoundOf32Rules.map(([id, homeSlot, allowedGroups]) => {
-    const wildcardTeam = qualifiedThirds.find(
-      (standing) =>
-        (allowedGroups as readonly string[]).includes(standing.team.group) && !usedThirdTeamIds.has(standing.team.id),
-    )
+  const wildcardMatches: RoundOf32Match[] = annexCAssignment
+    ? wildcardRoundOf32Rules.map(([id, homeSlot]) => {
+        const awaySlot = annexCAssignment[homeSlot as keyof typeof annexCAssignment]
+        const wildcardTeam = qualifiedThirdMap.get(awaySlot)
 
-    if (wildcardTeam) {
-      usedThirdTeamIds.add(wildcardTeam.team.id)
-    }
+        return {
+          id,
+          label: `Match ${id}`,
+          homeSlot,
+          awaySlot,
+          homeTeam: positionMap.get(homeSlot)?.team.name ?? 'TBD',
+          awayTeam: wildcardTeam?.team.name ?? 'Best 3rd place TBD',
+          routingMode: 'official',
+          note: wildcardTeam
+            ? `Official Annex C routing: ${homeSlot} faces ${awaySlot}.`
+            : `Official Annex C routing reserved for ${awaySlot}.`,
+        }
+      })
+    : (() => {
+        const usedThirdTeamIds = new Set<string>()
 
-    return {
-      id,
-      label: `Match ${id}`,
-      homeSlot,
-      awaySlot: `3${allowedGroups.join('/')}`,
-      homeTeam: positionMap.get(homeSlot)?.team.name ?? 'TBD',
-      awayTeam: wildcardTeam?.team.name ?? 'Best 3rd place TBD',
-      note: wildcardTeam
-        ? `Current provisional wildcard from Group ${wildcardTeam.team.group}.`
-        : 'Waiting for a qualified 3rd-place team.',
-    }
-  })
+        return wildcardRoundOf32Rules.map(([id, homeSlot, allowedGroups]) => {
+          const wildcardTeam = qualifiedThirds.find(
+            (standing) =>
+              (allowedGroups as readonly string[]).includes(standing.team.group) && !usedThirdTeamIds.has(standing.team.id),
+          )
+
+          if (wildcardTeam) {
+            usedThirdTeamIds.add(wildcardTeam.team.id)
+          }
+
+          return {
+            id,
+            label: `Match ${id}`,
+            homeSlot,
+            awaySlot: `3${allowedGroups.join('/')}`,
+            homeTeam: positionMap.get(homeSlot)?.team.name ?? 'TBD',
+            awayTeam: wildcardTeam?.team.name ?? 'Best 3rd place TBD',
+            routingMode: 'provisional' as const,
+            note: wildcardTeam
+              ? `Temporary routing before Annex C can be applied. Current third-place team comes from Group ${wildcardTeam.team.group}.`
+              : 'Waiting for enough third-placed teams to activate the exact Annex C routing.',
+          }
+        })
+      })()
 
   return [...fixedMatches, ...wildcardMatches].sort((left, right) => Number(left.id) - Number(right.id))
 }
 
+function getKnockoutWinner(match: KnockoutMatch, homeTeam: Team | null, awayTeam: Team | null) {
+  if (!match.acceptedPrediction || !homeTeam || !awayTeam) {
+    return null
+  }
+
+  if (match.acceptedPrediction.homeGoals === match.acceptedPrediction.awayGoals) {
+    return null
+  }
+
+  return match.acceptedPrediction.homeGoals > match.acceptedPrediction.awayGoals ? homeTeam : awayTeam
+}
+
+function getKnockoutLoser(match: KnockoutMatch, homeTeam: Team | null, awayTeam: Team | null) {
+  if (!match.acceptedPrediction || !homeTeam || !awayTeam) {
+    return null
+  }
+
+  if (match.acceptedPrediction.homeGoals === match.acceptedPrediction.awayGoals) {
+    return null
+  }
+
+  return match.acceptedPrediction.homeGoals > match.acceptedPrediction.awayGoals ? awayTeam : homeTeam
+}
+
+function resolveKnockoutMatches(
+  knockoutMatches: KnockoutMatch[],
+  standings: Record<string, Standing[]>,
+  rankedThirds: RankedThird[],
+) {
+  const roundOf32 = buildRoundOf32(standings, rankedThirds)
+  const roundOf32ById = new Map(roundOf32.map((match) => [match.id, match]))
+  const resolvedById = new Map<string, ResolvedKnockoutMatch>()
+  const knockoutById = new Map(knockoutMatches.map((match) => [match.id, match]))
+  const allStandingTeams = Object.values(standings).flat().map((standing) => standing.team)
+  const teamByName = new Map(allStandingTeams.map((team) => [team.name, team]))
+
+  function resolveFromSlot(slot: string): Team | null {
+    if (/^[123][A-L]$/.test(slot)) {
+      const place = Number(slot[0]) - 1
+      const groupName = slot[1]
+      return standings[groupName]?.[place]?.team ?? null
+    }
+
+    if (/^W\d+$/.test(slot)) {
+      const sourceMatchId = slot.slice(1)
+      const sourceResolved = resolvedById.get(sourceMatchId)
+      const sourceMatch = knockoutById.get(sourceMatchId)
+
+      if (!sourceResolved || !sourceMatch) {
+        return null
+      }
+
+      return getKnockoutWinner(sourceMatch, sourceResolved.homeTeam, sourceResolved.awayTeam)
+    }
+
+    if (/^L\d+$/.test(slot)) {
+      const sourceMatchId = slot.slice(1)
+      const sourceResolved = resolvedById.get(sourceMatchId)
+      const sourceMatch = knockoutById.get(sourceMatchId)
+
+      if (!sourceResolved || !sourceMatch) {
+        return null
+      }
+
+      return getKnockoutLoser(sourceMatch, sourceResolved.homeTeam, sourceResolved.awayTeam)
+    }
+
+    return null
+  }
+
+  const stageOrder: KnockoutStage[] = ['roundOf32', 'roundOf16', 'quarterFinals', 'semiFinals', 'thirdPlace', 'final']
+
+  stageOrder.forEach((stage) => {
+    knockoutMatches
+      .filter((match) => match.stage === stage)
+      .sort((left, right) => Number(left.id) - Number(right.id))
+      .forEach((match) => {
+        if (stage === 'roundOf32') {
+          const baseMatch = roundOf32ById.get(match.id)
+          const homeTeam = baseMatch && baseMatch.homeTeam !== 'TBD' ? resolveFromSlot(baseMatch.homeSlot) ?? teamByName.get(baseMatch.homeTeam) ?? null : null
+          const awayTeam = baseMatch && baseMatch.awayTeam !== 'TBD'
+            ? resolveFromSlot(baseMatch.awaySlot) ??
+              teamByName.get(baseMatch.awayTeam) ??
+              rankedThirds.find((standing) => standing.team.name === baseMatch.awayTeam)?.team ??
+              null
+            : null
+
+          resolvedById.set(match.id, {
+            match,
+            homeTeam,
+            awayTeam,
+            displayHomeSlot: baseMatch?.homeSlot ?? match.homeSlot,
+            displayAwaySlot: baseMatch?.awaySlot ?? match.awaySlot,
+            note: baseMatch?.note,
+          })
+          return
+        }
+
+        resolvedById.set(match.id, {
+          match,
+          homeTeam: resolveFromSlot(match.homeSlot),
+          awayTeam: resolveFromSlot(match.awaySlot),
+          displayHomeSlot: match.homeSlot,
+          displayAwaySlot: match.awaySlot,
+        })
+      })
+  })
+
+  return knockoutMatches.map((match) => resolvedById.get(match.id)!)
+}
+
+function sanitizeKnockoutMatches(knockoutMatches: KnockoutMatch[], resolvedMatches: ResolvedKnockoutMatch[]) {
+  return knockoutMatches.map((match) => {
+    const resolvedMatch = resolvedMatches.find((item) => item.match.id === match.id)
+    const currentHomeId = resolvedMatch?.homeTeam?.id
+    const currentAwayId = resolvedMatch?.awayTeam?.id
+    const participantsChanged =
+      match.lastResolvedHomeTeamId !== currentHomeId || match.lastResolvedAwayTeamId !== currentAwayId
+
+    if (!participantsChanged) {
+      return match
+    }
+
+    return {
+      ...match,
+      lastResolvedHomeTeamId: currentHomeId,
+      lastResolvedAwayTeamId: currentAwayId,
+      predictionAttempt: 0,
+      manualEditorOpen: false,
+      manualHomeGoals: '',
+      manualAwayGoals: '',
+      prediction: undefined,
+      acceptedPrediction: undefined,
+    }
+  })
+}
+
 function App() {
-  const [matches, setMatches] = useState<Match[]>(createInitialMatches)
-  const [activeView, setActiveView] = useState<ViewMode>('group')
+  const [matches, setMatches] = useState<Match[]>(() => mergeStoredGroupMatches(loadStoredState<Match[]>(storageKeys.groupMatches)))
+  const [knockoutMatches, setKnockoutMatches] = useState<KnockoutMatch[]>(() =>
+    mergeStoredKnockoutMatches(loadStoredState<KnockoutMatch[]>(storageKeys.knockoutMatches)),
+  )
+  const [activeView, setActiveView] = useState<ViewMode>(() => loadStoredState<ViewMode>(storageKeys.activeView) ?? 'group')
   const standings = buildStandings(matches)
   const rankedThirds = rankThirdPlacedTeams(standings)
-  const roundOf32 = buildRoundOf32(standings, rankedThirds)
+  const preliminaryResolvedKnockoutMatches = resolveKnockoutMatches(knockoutMatches, standings, rankedThirds)
+  const displayKnockoutMatches = sanitizeKnockoutMatches(knockoutMatches, preliminaryResolvedKnockoutMatches)
+  const resolvedKnockoutMatches = resolveKnockoutMatches(displayKnockoutMatches, standings, rankedThirds)
   const acceptedCount = matches.filter((match) => match.acceptedPrediction).length
+  const knockoutStageConfig: { stage: KnockoutStage; title: string; subtitle: string }[] = [
+    { stage: 'roundOf32', title: 'Round of 32', subtitle: '32 teams enter the bracket here.' },
+    { stage: 'roundOf16', title: 'Round of 16', subtitle: 'Winners from the opening knockout round.' },
+    { stage: 'quarterFinals', title: 'Quarter-finals', subtitle: 'The last eight teams.' },
+    { stage: 'semiFinals', title: 'Semi-finals', subtitle: 'Four teams remain.' },
+    { stage: 'thirdPlace', title: 'Third-place match', subtitle: 'Losers of the semi-finals.' },
+    { stage: 'final', title: 'Final', subtitle: 'The tournament decider.' },
+  ]
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.groupMatches, JSON.stringify(matches))
+  }, [matches])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.knockoutMatches, JSON.stringify(displayKnockoutMatches))
+  }, [displayKnockoutMatches])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.activeView, JSON.stringify(activeView))
+  }, [activeView])
 
   function handleTryToPredict(matchId: string) {
     setMatches((currentMatches) =>
@@ -889,7 +1400,7 @@ function App() {
                 ...match,
                 predictionAttempt: nextAttempt,
                 manualEditorOpen: false,
-                prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt),
+                prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match),
               }
             })()
           : match,
@@ -910,7 +1421,7 @@ function App() {
           ...match,
           predictionAttempt: nextAttempt,
           manualEditorOpen: false,
-          prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt),
+          prediction: predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match),
         }
       }),
     )
@@ -944,6 +1455,7 @@ function App() {
 
   function handleReset() {
     setMatches(createInitialMatches())
+    setKnockoutMatches(createInitialKnockoutMatches())
   }
 
   function handleResetMatch(matchId: string) {
@@ -1036,6 +1548,155 @@ function App() {
     )
   }
 
+  function handleTryToPredictKnockout(matchId: string) {
+    const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === matchId)
+
+    if (!resolvedMatch?.homeTeam || !resolvedMatch.awayTeam) {
+      return
+    }
+
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === matchId
+          ? (() => {
+              const nextAttempt = (match.predictionAttempt ?? 0) + 1
+              let prediction = predictMatch(resolvedMatch.homeTeam!, resolvedMatch.awayTeam!, 'New York/New Jersey', nextAttempt)
+
+              if (prediction.homeGoals === prediction.awayGoals) {
+                prediction = {
+                  ...prediction,
+                  homeGoals: prediction.homeGoals + 1,
+                  summary: `${prediction.summary} A knockout tiebreak adjustment avoids unresolved draws.`,
+                }
+              }
+
+              return {
+                ...match,
+                predictionAttempt: nextAttempt,
+                manualEditorOpen: false,
+                prediction,
+              }
+            })()
+          : match,
+      ),
+    )
+  }
+
+  function handleAcceptKnockout(matchId: string) {
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === matchId && match.prediction && match.prediction.homeGoals !== match.prediction.awayGoals
+          ? {
+              ...match,
+              acceptedPrediction: match.prediction,
+            }
+          : match,
+      ),
+    )
+  }
+
+  function handleResetKnockoutMatch(matchId: string) {
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === matchId
+          ? {
+              ...match,
+              predictionAttempt: 0,
+              manualEditorOpen: false,
+              manualHomeGoals: '',
+              manualAwayGoals: '',
+              prediction: undefined,
+              acceptedPrediction: undefined,
+            }
+          : match,
+      ),
+    )
+  }
+
+  function handleToggleKnockoutManualEditor(matchId: string) {
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.id !== matchId) {
+          return match
+        }
+
+        const resultToPrefill = match.acceptedPrediction ?? match.prediction
+
+        return {
+          ...match,
+          manualEditorOpen: !match.manualEditorOpen,
+          manualHomeGoals: resultToPrefill ? String(resultToPrefill.homeGoals) : (match.manualHomeGoals ?? ''),
+          manualAwayGoals: resultToPrefill ? String(resultToPrefill.awayGoals) : (match.manualAwayGoals ?? ''),
+        }
+      }),
+    )
+  }
+
+  function handleKnockoutManualScoreChange(matchId: string, side: 'home' | 'away', value: string) {
+    if (!/^\d{0,2}$/.test(value)) {
+      return
+    }
+
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === matchId
+          ? {
+              ...match,
+              manualHomeGoals: side === 'home' ? value : (match.manualHomeGoals ?? ''),
+              manualAwayGoals: side === 'away' ? value : (match.manualAwayGoals ?? ''),
+            }
+          : match,
+      ),
+    )
+  }
+
+  function handleSaveKnockoutManualPrediction(matchId: string) {
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) => {
+        if (match.id !== matchId) {
+          return match
+        }
+
+        if (!match.manualHomeGoals || !match.manualAwayGoals) {
+          return match
+        }
+
+        const homeGoals = Number(match.manualHomeGoals)
+        const awayGoals = Number(match.manualAwayGoals)
+
+        if (homeGoals === awayGoals) {
+          return match
+        }
+
+        return {
+          ...match,
+          manualEditorOpen: false,
+          prediction: {
+            homeGoals,
+            awayGoals,
+            confidence: 100,
+            homeWinProbability: homeGoals > awayGoals ? 100 : 0,
+            drawProbability: 0,
+            awayWinProbability: awayGoals > homeGoals ? 100 : 0,
+            homeExpectedGoals: homeGoals,
+            awayExpectedGoals: awayGoals,
+            modelStrength: 100,
+            summary: 'Manual knockout prediction entered by the user.',
+          },
+        }
+      }),
+    )
+  }
+
+  function handleClearSavedData() {
+    window.localStorage.removeItem(storageKeys.groupMatches)
+    window.localStorage.removeItem(storageKeys.knockoutMatches)
+    window.localStorage.removeItem(storageKeys.activeView)
+    setMatches(createInitialMatches())
+    setKnockoutMatches(createInitialKnockoutMatches())
+    setActiveView('group')
+  }
+
   return (
     <main className="app-shell">
       <section className="hero-panel">
@@ -1061,9 +1722,14 @@ function App() {
             <span>Next product step</span>
             <strong>Poules-style picks</strong>
           </article>
-          <button type="button" className="secondary-button" onClick={handleReset}>
-            Reset simulation
-          </button>
+          <div className="hero-button-stack">
+            <button type="button" className="secondary-button" onClick={handleReset}>
+              Reset simulation
+            </button>
+            <button type="button" className="secondary-button" onClick={handleClearSavedData}>
+              Clear saved data
+            </button>
+          </div>
         </div>
       </section>
 
@@ -1349,111 +2015,197 @@ function App() {
           </section>
         </>
       ) : (
-        <section className="layout-grid layout-grid-bottom">
-          <aside className="sidebar">
-            <section className="panel">
+        <>
+          <section className="panel">
+            <div className="section-header">
+              <div>
+                <p className="eyebrow">Wild cards</p>
+                <h2>Best third-placed teams</h2>
+              </div>
+            </div>
+
+            <div className="bracket-list">
+              {rankedThirds.map((row) => (
+                <article key={row.team.id} className="bracket-card">
+                  <span>
+                    Rank {row.rank} / Group {row.team.group}
+                  </span>
+                  <strong>{row.team.name}</strong>
+                  <p>
+                    {row.points} pts, GD {row.goalDifference}, GF {row.goalsFor}
+                  </p>
+                </article>
+              ))}
+            </div>
+          </section>
+
+          {knockoutStageConfig.map(({ stage, title, subtitle }) => (
+            <section key={stage} className="panel">
               <div className="section-header">
                 <div>
-                  <p className="eyebrow">Wild cards</p>
-                  <h2>Best third-placed teams</h2>
+                  <p className="eyebrow">Bracket phase</p>
+                  <h2>{title}</h2>
+                  <p>{subtitle}</p>
                 </div>
               </div>
 
-              <div className="bracket-list">
-                {rankedThirds.map((row) => (
-                  <article key={row.team.id} className="bracket-card">
-                    <span>
-                      Rank {row.rank} / Group {row.team.group}
-                    </span>
-                    <strong>{row.team.name}</strong>
-                    <p>
-                      {row.points} pts, GD {row.goalDifference}, GF {row.goalsFor}
-                    </p>
-                  </article>
-                ))}
+              <div className="knockout-stage-grid">
+                {resolvedKnockoutMatches
+                  .filter((resolvedMatch) => resolvedMatch.match.stage === stage)
+                  .sort((left, right) => Number(left.match.id) - Number(right.match.id))
+                  .map((resolvedMatch) => {
+                    const match = resolvedMatch.match
+                    const homeTeam = resolvedMatch.homeTeam
+                    const awayTeam = resolvedMatch.awayTeam
+                    const canPredict = Boolean(homeTeam && awayTeam)
+                    const scoreLabel = match.acceptedPrediction
+                      ? `${match.acceptedPrediction.homeGoals} : ${match.acceptedPrediction.awayGoals}`
+                      : match.prediction
+                        ? `${match.prediction.homeGoals} : ${match.prediction.awayGoals}`
+                        : 'vs'
+
+                    return (
+                      <article key={match.id} className="match-card knockout-match-card">
+                        <div className="match-meta">
+                          <span>{match.label}</span>
+                          <span>{title}</span>
+                        </div>
+
+                        <div className="knockout-slot-box">
+                          <span>{resolvedMatch.displayHomeSlot}</span>
+                          <span>{resolvedMatch.displayAwaySlot}</span>
+                        </div>
+
+                        <div className="match-teams">
+                          <div className="team-entry">
+                            <strong className="team-name">
+                              {homeTeam ? (
+                                <img className="team-flag" src={getFlagUrl(homeTeam)} alt={`Flag of ${homeTeam.name}`} />
+                              ) : (
+                                <span className="team-flag team-flag-placeholder" aria-hidden="true"></span>
+                              )}
+                              <span>{homeTeam?.name ?? 'Waiting for qualifier'}</span>
+                            </strong>
+                          </div>
+                          <div className="score-pill">{scoreLabel}</div>
+                          <div className="team-entry">
+                            <strong className="team-name">
+                              {awayTeam ? (
+                                <img className="team-flag" src={getFlagUrl(awayTeam)} alt={`Flag of ${awayTeam.name}`} />
+                              ) : (
+                                <span className="team-flag team-flag-placeholder" aria-hidden="true"></span>
+                              )}
+                              <span>{awayTeam?.name ?? 'Waiting for qualifier'}</span>
+                            </strong>
+                          </div>
+                        </div>
+
+                        {resolvedMatch.note ? (
+                          <div className="prediction-box prediction-box-muted">
+                            <p>{resolvedMatch.note}</p>
+                          </div>
+                        ) : null}
+
+                        {match.prediction ? (
+                          <div className="prediction-box">
+                            <div className="prediction-metrics">
+                              <span className="metric-pill">{homeTeam?.name ?? 'Home'} {match.prediction.homeWinProbability}%</span>
+                              <span className="metric-pill">Draw {match.prediction.drawProbability}%</span>
+                              <span className="metric-pill">{awayTeam?.name ?? 'Away'} {match.prediction.awayWinProbability}%</span>
+                              <span className="metric-pill">
+                                xG {match.prediction.homeExpectedGoals} - {match.prediction.awayExpectedGoals}
+                              </span>
+                              <span className="metric-pill">Model strength {match.prediction.modelStrength}%</span>
+                            </div>
+                            <p>
+                              <strong>{match.prediction.confidence}% confidence.</strong> {match.prediction.summary}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="prediction-box prediction-box-muted">
+                            <p>{canPredict ? 'Predict this knockout match and accept the winner to move forward.' : 'This match unlocks when both teams are known.'}</p>
+                          </div>
+                        )}
+
+                        {match.manualEditorOpen ? (
+                          <div className="manual-entry-box">
+                            <div className="manual-score-row">
+                              <label className="manual-score-field">
+                                <span>{homeTeam?.name ?? 'Home team'}</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={match.manualHomeGoals ?? ''}
+                                  onChange={(event) => handleKnockoutManualScoreChange(match.id, 'home', event.target.value)}
+                                />
+                              </label>
+                              <label className="manual-score-field">
+                                <span>{awayTeam?.name ?? 'Away team'}</span>
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  value={match.manualAwayGoals ?? ''}
+                                  onChange={(event) => handleKnockoutManualScoreChange(match.id, 'away', event.target.value)}
+                                />
+                              </label>
+                            </div>
+                            <button
+                              type="button"
+                              className="secondary-button"
+                              onClick={() => handleSaveKnockoutManualPrediction(match.id)}
+                              disabled={match.manualHomeGoals === '' || match.manualAwayGoals === '' || match.manualHomeGoals === match.manualAwayGoals}
+                            >
+                              Save manual prediction
+                            </button>
+                          </div>
+                        ) : null}
+
+                        <div className="action-row">
+                          <button
+                            type="button"
+                            className="primary-button"
+                            onClick={() => handleTryToPredictKnockout(match.id)}
+                            disabled={!canPredict}
+                          >
+                            {match.prediction ? 'Predict again' : 'Try to predict'}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleToggleKnockoutManualEditor(match.id)}
+                            disabled={!canPredict}
+                          >
+                            {match.manualEditorOpen ? 'Close manual entry' : 'Manual prediction'}
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleAcceptKnockout(match.id)}
+                            disabled={!match.prediction || match.prediction.homeGoals === match.prediction.awayGoals}
+                          >
+                            Accept
+                          </button>
+                          <button
+                            type="button"
+                            className="secondary-button"
+                            onClick={() => handleResetKnockoutMatch(match.id)}
+                            disabled={
+                              !match.prediction &&
+                              !match.acceptedPrediction &&
+                              !match.manualHomeGoals &&
+                              !match.manualAwayGoals
+                            }
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </article>
+                    )
+                  })}
               </div>
             </section>
-
-            <section className="panel">
-              <div className="section-header">
-                <div>
-                  <p className="eyebrow">Round of 32</p>
-                  <h2>2026 knockout entry bracket</h2>
-                </div>
-              </div>
-
-              <div className="bracket-list">
-                {roundOf32.map((match) => (
-                  <article key={match.id} className="bracket-card">
-                    <span>{match.label}</span>
-                    <strong>
-                      {match.homeSlot} {match.homeTeam}
-                    </strong>
-                    <strong>
-                      {match.awaySlot} {match.awayTeam}
-                    </strong>
-                    {match.note ? <p>{match.note}</p> : null}
-                  </article>
-                ))}
-              </div>
-            </section>
-
-            <section className="panel">
-              <div className="section-header">
-                <div>
-                  <p className="eyebrow">Knockout path</p>
-                  <h2>Later rounds scaffold</h2>
-                </div>
-              </div>
-
-              <div className="path-grid">
-                <div className="path-column">
-                  <h3>Round of 16</h3>
-                  {knockoutPath.roundOf16.map(([id, homeSlot, awaySlot]) => (
-                    <article key={id} className="path-card">
-                      <span>Match {id}</span>
-                      <strong>
-                        {homeSlot} vs {awaySlot}
-                      </strong>
-                    </article>
-                  ))}
-                </div>
-
-                <div className="path-column">
-                  <h3>Quarter-finals</h3>
-                  {knockoutPath.quarterFinals.map(([id, homeSlot, awaySlot]) => (
-                    <article key={id} className="path-card">
-                      <span>Match {id}</span>
-                      <strong>
-                        {homeSlot} vs {awaySlot}
-                      </strong>
-                    </article>
-                  ))}
-                </div>
-
-                <div className="path-column">
-                  <h3>Semi-finals and finals</h3>
-                  {knockoutPath.semiFinals.map(([id, homeSlot, awaySlot]) => (
-                    <article key={id} className="path-card">
-                      <span>Match {id}</span>
-                      <strong>
-                        {homeSlot} vs {awaySlot}
-                      </strong>
-                    </article>
-                  ))}
-                  {knockoutPath.finals.map(([id, homeSlot, awaySlot, label]) => (
-                    <article key={id} className="path-card">
-                      <span>{label}</span>
-                      <strong>
-                        {homeSlot} vs {awaySlot}
-                      </strong>
-                    </article>
-                  ))}
-                </div>
-              </div>
-            </section>
-          </aside>
-        </section>
+          ))}
+        </>
       )}
     </main>
   )
