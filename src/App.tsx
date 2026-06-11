@@ -3527,6 +3527,12 @@ function App() {
   const activeTeam = sortedTeams.find((team) => team.id === activeTeamId) ?? sortedTeams[0] ?? null
   const activeTeamDirectory = activeTeam ? teamDirectory[activeTeam.id] : undefined
   const knockoutStageConfig = knockoutStageConfigStatic
+  const roundOf32Preview = buildRoundOf32(activeStandings, rankedThirds)
+
+  function handleJumpToKnockoutMatch(matchId: string) {
+    setActiveView('bracket')
+    scrollToElementById(`knockout-match-${matchId}`)
+  }
 
   function getPhaseOrderIndex(phaseKey: PhaseKey) {
     return phaseKeyOrder.indexOf(phaseKey)
@@ -5723,17 +5729,31 @@ function App() {
             </div>
 
             <div className="bracket-list">
-              {rankedThirds.map((row) => (
-                <article key={row.team.id} className="bracket-card">
-                  <span>
-                    Rank {row.rank} / Group {row.team.group}
-                  </span>
-                  <strong>{row.team.name}</strong>
-                  <p>
-                    {row.points} pts, GD {row.goalDifference}, GF {row.goalsFor}
-                  </p>
-                </article>
-              ))}
+              {rankedThirds.map((row) => {
+                const opponentMatch = roundOf32Preview.find((match) => match.awayTeam === row.team.name)
+                const opponentLabel = opponentMatch
+                  ? `${opponentMatch.homeTeam} in Match ${opponentMatch.id}`
+                  : 'Round of 32 opponent not locked yet'
+
+                return (
+                  <button
+                    key={row.team.id}
+                    type="button"
+                    className="bracket-card bracket-card-button"
+                    onClick={() => opponentMatch ? handleJumpToKnockoutMatch(opponentMatch.id) : undefined}
+                    disabled={!opponentMatch}
+                  >
+                    <span>
+                      Rank {row.rank} / Group {row.team.group}
+                    </span>
+                    <strong>{row.team.name}</strong>
+                    <p>
+                      {row.points} pts, GD {row.goalDifference}, GF {row.goalsFor}
+                    </p>
+                    <small>{opponentLabel}</small>
+                  </button>
+                )
+              })}
             </div>
           </section>
 

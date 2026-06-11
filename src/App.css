@@ -51,6 +51,10 @@
   gap: 18px;
 }
 
+.bracket-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .hero-stats {
   align-content: start;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -113,6 +117,25 @@
 .simulation-focus-card p,
 .simulation-card p {
   margin: 8px 0 0;
+}
+
+.bracket-card-button {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  border-radius: 20px;
+}
+
+.bracket-card-button small {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+}
+
+.bracket-card-button:disabled {
+  cursor: default;
+  opacity: 0.82;
 }
 
 .phase-award-columns {
@@ -1594,6 +1617,7 @@ tbody tr:last-child td {
   .layout-grid,
   .info-grid,
   .path-grid,
+  .bracket-list,
   .standings-grid,
   .phase-awards-grid,
   .phase-award-columns,
