@@ -271,6 +271,9 @@ type ActualResultSnapshot = {
   sourceLabel: string
   refreshedAt: string
   note?: string
+  isLive?: boolean
+  isCompleted?: boolean
+  displayLabel?: string
 }
 
 type MarketTarget = {
@@ -868,7 +871,7 @@ const defaultMarketApiState: MarketApiState = {
   actualResultsByMatchId: {},
   trustedSources: ['betfair', 'pinnacle'],
   marketStatus: 'Market odds will appear here after the backend refresh runs.',
-  actualResultStatus: 'Real match results will appear here after completed fixtures are available.',
+  actualResultStatus: 'Real match results and live scores will be loaded from FIFA.com when available.',
   stsStatus: 'STS backend adapter is ready for mapped match URLs.',
   apiKeyConfigured: false,
   oddsApiUsage: undefined,
@@ -1368,6 +1371,39 @@ function getViewerTimeZone() {
 
 function formatViewerDateTime(date: Date) {
   return formatDateTime(date, getViewerTimeZone())
+}
+
+function isKickoffInsideLiveWindow(kickoffUtc: string, nowTimestamp: number) {
+  const kickoffTime = new Date(kickoffUtc).getTime()
+
+  if (Number.isNaN(kickoffTime)) {
+    return false
+  }
+
+  const ninetyMinutesMs = 1000 * 60 * 90
+  const extraBufferMs = 1000 * 60 * 45
+
+  return nowTimestamp >= kickoffTime && nowTimestamp <= kickoffTime + ninetyMinutesMs + extraBufferMs
+}
+
+function formatActualResultLabel(actualResult?: ActualResultSnapshot) {
+  if (!actualResult) {
+    return ''
+  }
+
+  if (actualResult.displayLabel) {
+    return actualResult.displayLabel
+  }
+
+  if (actualResult.isLive) {
+    return 'Live'
+  }
+
+  if (actualResult.isCompleted) {
+    return 'Final'
+  }
+
+  return ''
 }
 
 function getErrorMessage(error: unknown) {
@@ -3748,6 +3784,7 @@ function App() {
   const [simulationRunCount, setSimulationRunCount] = useState<number>(10000)
   const [simulationReport, setSimulationReport] = useState<DetailedSimulationReport | null>(null)
   const [isRunningSimulation, setIsRunningSimulation] = useState(false)
+  const [nowTimestamp, setNowTimestamp] = useState(() => Date.now())
   const [adaptiveLearningState, setAdaptiveLearningState] = useState<AdaptiveLearningState>(() =>
     normalizeAdaptiveLearningState(loadStoredState<AdaptiveLearningState>(storageKeys.adaptiveLearning)),
   )
@@ -3856,6 +3893,29 @@ function App() {
   const activeTeamDirectory = activeTeam ? teamDirectory[activeTeam.id] : undefined
   const knockoutStageConfig = knockoutStageConfigStatic
   const roundOf32Preview = buildRoundOf32(activeStandings, rankedThirds)
+  const allMarketTargets: MarketTarget[] = [
+    ...matches.map((match) => ({
+      id: match.id,
+      kickoffUtc: match.kickoffUtc,
+      homeTeam: match.homeTeam,
+      awayTeam: match.awayTeam,
+    })),
+    ...resolvedKnockoutMatches
+      .filter((item) => item.homeTeam && item.awayTeam && item.schedule)
+      .map((item) => ({
+        id: item.match.id,
+        kickoffUtc: item.schedule!.kickoffUtc,
+        homeTeam: item.homeTeam!,
+        awayTeam: item.awayTeam!,
+      })),
+  ]
+  const liveMarketTargets = allMarketTargets.filter((target) => isKickoffInsideLiveWindow(target.kickoffUtc, nowTimestamp))
+  const liveMarketTargetsKey = liveMarketTargets.map((target) => target.id).join('|')
+  const liveMarketTargetsSerialized = JSON.stringify(liveMarketTargets)
+  const liveAutoRefreshSummary =
+    liveMarketTargets.length > 0
+      ? `Live score auto-refresh is active for ${liveMarketTargets.length} ongoing match${liveMarketTargets.length === 1 ? '' : 'es'}. The backend checks for fresh scores every minute.`
+      : 'No match is currently live, so automatic score refresh is idle.'
   const matchDayItems = [
     ...matches.map((match) => {
       const viewerDateTime = formatViewerDateTime(new Date(match.kickoffUtc))
@@ -4288,6 +4348,14 @@ function App() {
   }, [adaptiveLearningState])
 
   useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setNowTimestamp(Date.now())
+    }, 60_000)
+
+    return () => window.clearInterval(intervalId)
+  }, [])
+
+  useEffect(() => {
     const timeoutId = window.setTimeout(() => {
       setAdaptiveLearningState((currentState) => {
         let nextState = currentState
@@ -4345,6 +4413,37 @@ function App() {
         setLiveDataState(defaultLiveDataState)
       })
   }, [])
+
+  useEffect(() => {
+    if (!liveMarketTargetsKey || !marketApiState.apiKeyConfigured) {
+      return
+    }
+
+    let isCancelled = false
+    const liveMatchTargetsSnapshot = JSON.parse(liveMarketTargetsSerialized) as MarketTarget[]
+
+    const refreshLiveScores = async () => {
+      try {
+        const nextState = await refreshMarketStateInBackend(liveMatchTargetsSnapshot)
+
+        if (!isCancelled) {
+          setMarketApiState(nextState)
+          setBackendConnectionStatus('online')
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          const message = getErrorMessage(error)
+          setBackendConnectionStatus(message.includes('Odds API key is missing') ? 'online' : 'offline')
+        }
+      }
+    }
+
+    void refreshLiveScores()
+
+    return () => {
+      isCancelled = true
+    }
+  }, [liveMarketTargetsKey, liveMarketTargetsSerialized, marketApiState.apiKeyConfigured])
 
   async function handleRefreshLiveData() {
     if (teamRefreshTargets.length === 0) {
@@ -4727,29 +4826,12 @@ function App() {
       title: 'Refreshing bets and bookmaker odds...',
       details: [
         'Backend market odds are being refreshed from bookmaker adapters.',
-        'Completed match results from the odds provider are being refreshed too.',
+        'Live and completed match scores from the odds provider are being refreshed too.',
       ],
     })
 
     try {
-      const marketTargets: MarketTarget[] = [
-        ...matches.map((match) => ({
-          id: match.id,
-          kickoffUtc: match.kickoffUtc,
-          homeTeam: match.homeTeam,
-          awayTeam: match.awayTeam,
-        })),
-        ...resolvedKnockoutMatches
-          .filter((item) => item.homeTeam && item.awayTeam && item.schedule)
-          .map((item) => ({
-            id: item.match.id,
-            kickoffUtc: item.schedule!.kickoffUtc,
-            homeTeam: item.homeTeam!,
-            awayTeam: item.awayTeam!,
-          })),
-      ]
-
-      const marketResult = await refreshMarketStateInBackend(marketTargets)
+      const marketResult = await refreshMarketStateInBackend(allMarketTargets)
       setMarketApiState(marketResult)
       setBackendConnectionStatus('online')
       setRefreshFeedback({
@@ -5591,6 +5673,11 @@ function App() {
         <span className={`score-comparison-item ${actualResult ? 'score-comparison-item-live' : ''}`}>
           <span>Actual</span>
           <strong>{formatActualResultScore(matchId)}</strong>
+          {actualResult ? (
+            <em className={`live-score-badge ${actualResult.isLive ? 'live-score-badge-active' : ''}`}>
+              {formatActualResultLabel(actualResult) || 'Result'}
+            </em>
+          ) : null}
           {actualResult?.sourceLabel ? <small>{actualResult.sourceLabel}</small> : null}
         </span>
       </div>
@@ -5684,6 +5771,7 @@ function App() {
             <p className="hero-status-copy">{liveRefreshStatus}</p>
             <p className="hero-status-copy">{marketApiState.marketStatus}</p>
             <p className="hero-status-copy">{marketApiState.actualResultStatus}</p>
+            <p className="hero-status-copy">{liveAutoRefreshSummary}</p>
             <p className="hero-status-copy">{marketApiState.stsStatus}</p>
             <div className="learning-status-box">
               <div>
@@ -6612,6 +6700,11 @@ function App() {
                           <span>Actual</span>
                           <strong>{item.actualScore || '- : -'}</strong>
                         </div>
+                        <div className="match-day-score-line">
+                          <span>Status</span>
+                          <strong>{formatActualResultLabel(marketApiState.actualResultsByMatchId[item.id]) || 'Scheduled'}</strong>
+                        </div>
+                        {marketApiState.actualResultsByMatchId[item.id]?.isLive ? <em className="live-score-badge live-score-badge-active">Live</em> : null}
                         {item.actualSourceLabel ? <small>{item.actualSourceLabel}</small> : null}
                       </div>
 

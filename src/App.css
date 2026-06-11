@@ -1228,6 +1228,27 @@
   font-size: 0.74rem;
 }
 
+.live-score-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(8, 28, 54, 0.08);
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-score-badge-active {
+  background: rgba(208, 34, 62, 0.14);
+  color: #b42318;
+}
+
 .score-comparison-item-live {
   background: rgba(10, 125, 85, 0.08);
   border-color: rgba(10, 125, 85, 0.16);

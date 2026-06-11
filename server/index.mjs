@@ -40,7 +40,7 @@ const defaultState = {
   actualResultsByMatchId: {},
   trustedSources: ['betfair', 'pinnacle'],
   marketStatus: 'Market odds will appear here after the backend refresh runs.',
-  actualResultStatus: 'Real match results will appear here after completed fixtures are available.',
+  actualResultStatus: 'Real match results and live scores will be loaded from FIFA.com when available.',
   stsStatus: 'STS backend adapter is ready for mapped match URLs.',
   latestRefreshAt: undefined,
   latestActualResultsRefreshAt: undefined,
@@ -121,6 +121,19 @@ const oddsApiBookmakerKeyBySource = {
   pinnacle: 'pinnacle',
   fanduel: 'fanduel',
 }
+
+const fifaMatchStageLabels = new Set([
+  'First Stage',
+  'Round of 32',
+  'Round of 16',
+  'Quarter-final',
+  'Semi-final',
+  'Play-off for third place',
+  'Final',
+])
+
+const fifaLiveStatusLabels = new Set(['LIVE', 'HT', 'ET', 'ET HT', 'PSO'])
+const fifaCompletedStatusLabels = new Set(['FT', 'A', 'C', 'S', 'F', 'P'])
 
 function normalizeParticipantName(name) {
   return name
@@ -224,14 +237,31 @@ function createOddsSnapshot(sourceKey, odds, refreshedAt, note) {
   }
 }
 
-function createActualResultSnapshot(homeGoals, awayGoals, sourceLabel, refreshedAt, note) {
+function createActualResultSnapshot(homeGoals, awayGoals, sourceLabel, refreshedAt, note, options = {}) {
   return {
     homeGoals,
     awayGoals,
     sourceLabel,
     refreshedAt,
     note,
+    isLive: options.isLive ?? false,
+    isCompleted: options.isCompleted ?? false,
+    displayLabel: options.displayLabel ?? (options.isLive ? 'Live' : options.isCompleted ? 'Final' : undefined),
   }
+}
+
+function isKickoffInsideLiveWindow(kickoffUtc) {
+  const kickoffTime = new Date(kickoffUtc).getTime()
+
+  if (Number.isNaN(kickoffTime)) {
+    return false
+  }
+
+  const now = Date.now()
+  const ninetyMinutesMs = 1000 * 60 * 90
+  const extraBufferMs = 1000 * 60 * 45
+
+  return now >= kickoffTime && now <= kickoffTime + ninetyMinutesMs + extraBufferMs
 }
 
 function parseStsOneXTwoOdds(html) {
@@ -483,13 +513,13 @@ async function fetchOddsApiBookmakerMarkets(matches) {
   }
 }
 
-async function fetchOddsApiCompletedScores(matches) {
+async function fetchOddsApiScores(matches) {
   const apiKey = runtimeOddsApiKey
 
   if (!apiKey) {
     return {
       actualResultsByMatchId: {},
-      status: 'Real results need an Odds API key before completed scores can be downloaded.',
+      status: 'Real results and live scores need an Odds API key before they can be downloaded.',
       usage: undefined,
     }
   }
@@ -506,6 +536,8 @@ async function fetchOddsApiCompletedScores(matches) {
   const payload = await response.json()
   const actualResultsByMatchId = {}
   let matchedCount = 0
+  let liveCount = 0
+  let completedCount = 0
 
   for (const match of matches) {
     const homeCandidates = getTeamNameCandidates(match.homeTeam).map(normalizeParticipantName)
@@ -516,7 +548,6 @@ async function fetchOddsApiCompletedScores(matches) {
       const normalizedAway = normalizeParticipantName(event.away_team)
       const eventTime = new Date(event.commence_time).getTime()
       return (
-        event.completed &&
         homeCandidates.includes(normalizedHome) &&
         awayCandidates.includes(normalizedAway) &&
         Math.abs(eventTime - kickoffTime) <= 1000 * 60 * 60 * 36
@@ -534,14 +565,32 @@ async function fetchOddsApiCompletedScores(matches) {
       continue
     }
 
+    const isCompleted = Boolean(matchedEvent.completed)
+    const isLive = !isCompleted && isKickoffInsideLiveWindow(match.kickoffUtc)
+
     actualResultsByMatchId[match.id] = createActualResultSnapshot(
       Number(homeScore.score),
       Number(awayScore.score),
       'The Odds API scores',
       new Date().toISOString(),
-      `Completed score matched to ${matchedEvent.commence_time}.`,
+      isCompleted
+        ? `Completed score matched to ${matchedEvent.commence_time}.`
+        : `Live score matched to ${matchedEvent.commence_time}.`,
+      {
+        isLive,
+        isCompleted,
+        displayLabel: isLive ? 'Live' : isCompleted ? 'Final' : 'Score',
+      },
     )
     matchedCount += 1
+
+    if (isLive) {
+      liveCount += 1
+    }
+
+    if (isCompleted) {
+      completedCount += 1
+    }
   }
 
   return {
@@ -549,8 +598,33 @@ async function fetchOddsApiCompletedScores(matches) {
     usage,
     status:
       matchedCount > 0
-        ? `Loaded real completed results for ${matchedCount} match${matchedCount === 1 ? '' : 'es'} from The Odds API scores.`
-        : 'The Odds API scores endpoint responded, but no completed World Cup fixtures matched the current schedule.',
+        ? `Loaded ${completedCount} final and ${liveCount} live score snapshot${matchedCount === 1 ? '' : 's'} from The Odds API scores.`
+        : 'The Odds API scores endpoint responded, but no World Cup score snapshots matched the current schedule.',
+  }
+}
+
+async function fetchPreferredScoreSnapshots(matches) {
+  try {
+    return await fetchFifaScoreSnapshots(matches)
+  } catch (error) {
+    const fifaMessage = error instanceof Error ? error.message : 'FIFA.com score provider failed.'
+
+    try {
+      const oddsApiResult = await fetchOddsApiScores(matches)
+
+      return {
+        ...oddsApiResult,
+        status: `${fifaMessage} Falling back to The Odds API. ${oddsApiResult.status}`,
+      }
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : 'The Odds API score fallback failed.'
+
+      return {
+        actualResultsByMatchId: {},
+        usage: undefined,
+        status: `${fifaMessage} ${fallbackMessage}`,
+      }
+    }
   }
 }
 
@@ -1034,6 +1108,149 @@ async function getOrCreateFifaBrowser(existingBrowser) {
   })
 }
 
+function parseFifaScoreEntriesFromLines(lines) {
+  const entries = []
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+
+    if (line !== 'View groups' && line !== 'View brackets') {
+      continue
+    }
+
+    const homeTeam = lines[index + 1]
+    const secondToken = lines[index + 2]
+    const thirdToken = lines[index + 3]
+    const fourthToken = lines[index + 4]
+    const fifthToken = lines[index + 5]
+    const sixthToken = lines[index + 6]
+
+    if (!homeTeam || !secondToken || !thirdToken) {
+      continue
+    }
+
+    if (/^\d{1,2}:\d{2}$/.test(secondToken) && fifaMatchStageLabels.has(fourthToken)) {
+      entries.push({
+        homeTeam,
+        awayTeam: thirdToken,
+        status: 'SCHEDULED',
+        stage: fourthToken,
+      })
+      continue
+    }
+
+    if (/^\d+$/.test(secondToken) && /^\d+$/.test(fourthToken) && fifaMatchStageLabels.has(sixthToken)) {
+      entries.push({
+        homeTeam,
+        awayTeam: fifthToken,
+        homeGoals: Number(secondToken),
+        awayGoals: Number(fourthToken),
+        status: thirdToken,
+        stage: sixthToken,
+      })
+    }
+  }
+
+  return entries
+}
+
+async function fetchFifaScoreSnapshots(matches) {
+  if (!fifaBrowserExecutablePath) {
+    throw new Error('FIFA live score fallback is unavailable because no supported local browser executable was found.')
+  }
+
+  const browser = await getOrCreateFifaBrowser(null)
+
+  if (!browser) {
+    throw new Error('FIFA live score fallback could not start a local browser session.')
+  }
+
+  const page = await browser.newPage()
+
+  try {
+    await page.goto(
+      'https://www.fifa.com/en/tournaments/mens/worldcup/canadamexicousa2026/scores-fixtures?country=&wtw-filter=ALL',
+      { waitUntil: 'networkidle2', timeout: 120000 },
+    )
+
+    await page.waitForSelector('body', { timeout: 30000 })
+    await page.waitForFunction(
+      () => document.body.innerText.includes('Scores & Fixtures') && document.body.innerText.includes('View groups'),
+      { timeout: 60000 },
+    )
+
+    const pageText = await page.evaluate(() => document.body.innerText)
+    const lines = pageText
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+
+    const fifaEntries = parseFifaScoreEntriesFromLines(lines)
+    const actualResultsByMatchId = {}
+    let matchedCount = 0
+    let liveCount = 0
+    let completedCount = 0
+
+    for (const match of matches) {
+      const homeCandidates = getTeamNameCandidates(match.homeTeam).map(normalizeParticipantName)
+      const awayCandidates = getTeamNameCandidates(match.awayTeam).map(normalizeParticipantName)
+      const matchedEntry = fifaEntries.find(
+        (entry) =>
+          homeCandidates.includes(normalizeParticipantName(entry.homeTeam)) &&
+          awayCandidates.includes(normalizeParticipantName(entry.awayTeam)),
+      )
+
+      if (!matchedEntry || matchedEntry.homeGoals === undefined || matchedEntry.awayGoals === undefined) {
+        continue
+      }
+
+      const normalizedStatus = String(matchedEntry.status ?? '').toUpperCase()
+      const isLive = fifaLiveStatusLabels.has(normalizedStatus)
+      const isCompleted = fifaCompletedStatusLabels.has(normalizedStatus)
+      const displayLabel = isLive
+        ? normalizedStatus === 'LIVE'
+          ? 'Live'
+          : normalizedStatus
+        : isCompleted
+          ? 'Final'
+          : normalizedStatus || 'Score'
+
+      actualResultsByMatchId[match.id] = createActualResultSnapshot(
+        matchedEntry.homeGoals,
+        matchedEntry.awayGoals,
+        'FIFA.com scores & fixtures',
+        new Date().toISOString(),
+        `Score matched from FIFA.com ${matchedEntry.stage} listing.`,
+        {
+          isLive,
+          isCompleted,
+          displayLabel,
+        },
+      )
+
+      matchedCount += 1
+      if (isLive) {
+        liveCount += 1
+      }
+      if (isCompleted) {
+        completedCount += 1
+      }
+    }
+
+    return {
+      actualResultsByMatchId,
+      usage: undefined,
+      status:
+        matchedCount > 0
+          ? `Loaded ${completedCount} final and ${liveCount} live score snapshot${matchedCount === 1 ? '' : 's'} from FIFA.com scores & fixtures.`
+          : 'FIFA.com scores & fixtures responded, but no World Cup score snapshots matched the current schedule.',
+    }
+  } finally {
+    await page.close().catch(() => {})
+    await browser.close().catch(() => {})
+  }
+}
+
 async function fetchFifaSquadFallback(team, browser) {
   if (!browser) {
     return null
@@ -1346,7 +1563,7 @@ app.post('/api/market/refresh', async (request, response) => {
             nextOddsByMatchId: {},
             status: 'Preserved current STS odds. No missing mapped markets needed a global refresh.',
           }),
-      fetchOddsApiCompletedScores(matches).catch((error) => ({
+      fetchPreferredScoreSnapshots(matches).catch((error) => ({
         actualResultsByMatchId: {},
         status: error instanceof Error ? `Real results refresh failed: ${error.message}` : 'Real results refresh failed.',
         usage: undefined,
