@@ -119,6 +119,28 @@
   margin: 8px 0 0;
 }
 
+.simulation-current-accepted-box {
+  display: grid;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(249, 246, 238, 0.96);
+  border: 1px solid rgba(8, 28, 54, 0.08);
+}
+
+.simulation-current-accepted-box span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.simulation-current-accepted-box strong {
+  color: var(--text-strong);
+}
+
 .bracket-card-button {
   width: 100%;
   text-align: left;
@@ -431,6 +453,77 @@
 .odds-api-usage-box strong {
   color: #f4f8f2;
   font-size: 1rem;
+}
+
+.learning-status-box {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(8, 28, 54, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.learning-status-box span,
+.learning-status-box strong {
+  display: block;
+}
+
+.learning-status-box span {
+  color: rgba(244, 248, 242, 0.68);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.learning-status-box strong {
+  color: #f4f8f2;
+  font-size: 0.94rem;
+}
+
+.learning-status-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.learning-log-details {
+  margin-top: 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.learning-log-details .prediction-summary {
+  color: #f4f8f2;
+  padding: 14px 16px;
+}
+
+.learning-log-list {
+  display: grid;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.learning-log-item {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(8, 28, 54, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.learning-log-item span,
+.learning-log-item p,
+.learning-log-item small {
+  color: rgba(244, 248, 242, 0.8);
+}
+
+.learning-log-item strong {
+  color: #f4f8f2;
 }
 
 .odds-api-usage-button {

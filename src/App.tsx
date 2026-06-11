@@ -10,6 +10,21 @@ type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
 type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
 type PhaseAwardKey = 'goalMachine' | 'disastrousDefence' | 'cardKings' | 'nobleEleven'
 type PhaseKey = 'group' | KnockoutStage
+type AdaptiveFactorKey =
+  | 'rating'
+  | 'profile'
+  | 'recentForm'
+  | 'injury'
+  | 'absences'
+  | 'schedule'
+  | 'rotation'
+  | 'motivation'
+  | 'continuity'
+  | 'matchup'
+  | 'squadDepth'
+  | 'draw'
+  | 'venue'
+  | 'market'
 
 type SimulationFocus = {
   stage: 'group' | 'knockout'
@@ -41,6 +56,22 @@ type PhaseAwardSnapshot = {
   value: number
   confidence: number
   summary: string
+}
+
+type AdaptiveLearningEntry = {
+  id: string
+  createdAt: string
+  matchId: string
+  summary: string
+  factorChanges: string[]
+  bookmakerChanges: string[]
+}
+
+type AdaptiveLearningState = {
+  factorWeights: Record<AdaptiveFactorKey, number>
+  bookmakerWeights: Record<BookmakerSourceKey, number>
+  processedActualMatchIds: string[]
+  learningLog: AdaptiveLearningEntry[]
 }
 
 type TeamModelProfile = {
@@ -792,6 +823,7 @@ const storageKeys = {
   liveTeamForm: 'world-cup-betting-system/live-team-form',
   teamDirectory: 'world-cup-betting-system/team-directory',
   phaseAwards: 'world-cup-betting-system/phase-awards',
+  adaptiveLearning: 'world-cup-betting-system/adaptive-learning',
 } as const
 
 const TEAM_DATA_STALE_AFTER_MS = 1000 * 60 * 60 * 12
@@ -836,6 +868,37 @@ const phaseAwardDefinitions: { key: PhaseAwardKey; title: string; description: s
 
 const phaseKeyOrder: PhaseKey[] = ['group', 'roundOf32', 'roundOf16', 'quarterFinals', 'semiFinals', 'thirdPlace', 'final']
 
+const defaultAdaptiveFactorWeights: Record<AdaptiveFactorKey, number> = {
+  rating: 1,
+  profile: 1,
+  recentForm: 1,
+  injury: 1,
+  absences: 1,
+  schedule: 1,
+  rotation: 1,
+  motivation: 1,
+  continuity: 1,
+  matchup: 1,
+  squadDepth: 1,
+  draw: 1,
+  venue: 1,
+  market: 1,
+}
+
+const defaultAdaptiveBookmakerWeights: Record<BookmakerSourceKey, number> = {
+  betfair: 1,
+  pinnacle: 1,
+  fanduel: 1,
+  sts: 1,
+}
+
+const defaultAdaptiveLearningState: AdaptiveLearningState = {
+  factorWeights: { ...defaultAdaptiveFactorWeights },
+  bookmakerWeights: { ...defaultAdaptiveBookmakerWeights },
+  processedActualMatchIds: [],
+  learningLog: [],
+}
+
 const defaultLiveDataState: LiveDataState = {
   liveTeamFormById: {},
   teamDirectoryById: {},
@@ -876,27 +939,229 @@ function normalizeMarketApiState(state: Partial<MarketApiState>): MarketApiState
   }
 }
 
+function normalizeAdaptiveLearningState(state: Partial<AdaptiveLearningState> | null | undefined): AdaptiveLearningState {
+  return {
+    factorWeights: {
+      ...defaultAdaptiveFactorWeights,
+      ...(state?.factorWeights ?? {}),
+    },
+    bookmakerWeights: {
+      ...defaultAdaptiveBookmakerWeights,
+      ...(state?.bookmakerWeights ?? {}),
+    },
+    processedActualMatchIds: state?.processedActualMatchIds ?? [],
+    learningLog: (state?.learningLog ?? []).map((entry) => ({
+      ...entry,
+      factorChanges: entry.factorChanges ?? [],
+      bookmakerChanges: entry.bookmakerChanges ?? [],
+    })),
+  }
+}
+
+function clampAdaptiveWeight(value: number) {
+  return clamp(value, 0.82, 1.18)
+}
+
+function formatAdaptiveFactorLabel(factorKey: AdaptiveFactorKey) {
+  switch (factorKey) {
+    case 'recentForm':
+      return 'recent form'
+    case 'squadDepth':
+      return 'squad depth'
+    case 'matchup':
+      return 'matchup'
+    case 'continuity':
+      return 'continuity'
+    case 'absences':
+      return 'absences'
+    default:
+      return factorKey
+  }
+}
+
+function getPredictionOutcomeSignal(prediction: Prediction) {
+  const maxProbability = Math.max(prediction.homeWinProbability, prediction.drawProbability, prediction.awayWinProbability)
+
+  if (maxProbability === prediction.drawProbability) {
+    return 0
+  }
+
+  return maxProbability === prediction.homeWinProbability ? 1 : -1
+}
+
+function getActualOutcomeSignal(actualResult: ActualResultSnapshot) {
+  if (actualResult.homeGoals === actualResult.awayGoals) {
+    return 0
+  }
+
+  return actualResult.homeGoals > actualResult.awayGoals ? 1 : -1
+}
+
+function getOutcomeVectorFromResult(actualResult: ActualResultSnapshot) {
+  return {
+    home: actualResult.homeGoals > actualResult.awayGoals ? 1 : 0,
+    draw: actualResult.homeGoals === actualResult.awayGoals ? 1 : 0,
+    away: actualResult.homeGoals < actualResult.awayGoals ? 1 : 0,
+  }
+}
+
+function getThreeWayBrierScore(homeProbability: number, drawProbability: number, awayProbability: number, actualResult: ActualResultSnapshot) {
+  const outcome = getOutcomeVectorFromResult(actualResult)
+  return (
+    ((homeProbability / 100 - outcome.home) ** 2 +
+      (drawProbability / 100 - outcome.draw) ** 2 +
+      (awayProbability / 100 - outcome.away) ** 2) /
+    3
+  )
+}
+
+function mapFactorLabelToAdaptiveKey(label: string): AdaptiveFactorKey | null {
+  switch (label) {
+    case 'Rating edge':
+      return 'rating'
+    case 'Team profile edge':
+      return 'profile'
+    case 'Recent form edge':
+      return 'recentForm'
+    case 'Injury edge':
+      return 'injury'
+    case 'Key absences edge':
+      return 'absences'
+    case 'Rest edge':
+    case 'Travel edge':
+      return 'schedule'
+    case 'Rotation risk edge':
+      return 'rotation'
+    case 'Motivation edge':
+      return 'motivation'
+    case 'Coach continuity edge':
+      return 'continuity'
+    case 'Matchup history edge':
+      return 'matchup'
+    case 'Squad depth edge':
+      return 'squadDepth'
+    case 'Draw tolerance swing':
+      return 'draw'
+    case 'Market odds edge':
+      return 'market'
+    case 'Venue and altitude edge':
+      return 'venue'
+    default:
+      return null
+  }
+}
+
+function learnFromPredictionResult(
+  currentState: AdaptiveLearningState,
+  matchId: string,
+  prediction: Prediction,
+  actualResult: ActualResultSnapshot,
+  oddsBySource: MatchBookmakerOdds | undefined,
+): AdaptiveLearningState {
+  if (currentState.processedActualMatchIds.includes(matchId)) {
+    return currentState
+  }
+
+  const nextState = normalizeAdaptiveLearningState(currentState)
+  const actualOutcomeSignal = getActualOutcomeSignal(actualResult)
+  const predictionOutcomeSignal = getPredictionOutcomeSignal(prediction)
+  const outcomeHit = actualOutcomeSignal === predictionOutcomeSignal
+  const goalDistance = Math.abs(prediction.homeGoals - actualResult.homeGoals) + Math.abs(prediction.awayGoals - actualResult.awayGoals)
+  const closenessFactor = clamp(1 - goalDistance / 6, 0.28, 1)
+  const factorChanges: Array<{ key: AdaptiveFactorKey; delta: number }> = []
+  const bookmakerChanges: Array<{ key: BookmakerSourceKey; delta: number }> = []
+
+  prediction.factorBreakdown.forEach((factor) => {
+    const adaptiveKey = mapFactorLabelToAdaptiveKey(factor.label)
+
+    if (!adaptiveKey) {
+      return
+    }
+
+    const magnitude = Math.min(Math.abs(factor.impact), 0.35)
+    let alignment = 0
+
+    if (actualOutcomeSignal === 0) {
+      alignment = Math.abs(factor.impact) <= 0.05 ? 1 : -1
+    } else if (Math.abs(factor.impact) >= 0.015) {
+      alignment = Math.sign(factor.impact) === actualOutcomeSignal ? 1 : -1
+    }
+
+    if (alignment === 0) {
+      return
+    }
+
+    const learningRate = outcomeHit ? 0.05 : 0.06
+    const delta = alignment * magnitude * learningRate * closenessFactor
+    nextState.factorWeights[adaptiveKey] = clampAdaptiveWeight(nextState.factorWeights[adaptiveKey] + delta)
+    factorChanges.push({ key: adaptiveKey, delta })
+  })
+
+  Object.entries(oddsBySource ?? {}).forEach(([sourceKey, snapshot]) => {
+    if (!snapshot) {
+      return
+    }
+
+    const source = sourceKey as BookmakerSourceKey
+    const brierScore = getThreeWayBrierScore(snapshot.homeProbability, snapshot.drawProbability, snapshot.awayProbability, actualResult)
+    const centeredPerformance = 0.22 - brierScore
+    const delta = clamp(centeredPerformance * 0.08 * closenessFactor, -0.012, 0.012)
+    nextState.bookmakerWeights[source] = clampAdaptiveWeight(nextState.bookmakerWeights[source] + delta)
+    bookmakerChanges.push({ key: source, delta })
+  })
+
+  nextState.processedActualMatchIds = [...nextState.processedActualMatchIds, matchId]
+  nextState.learningLog = [
+    ...nextState.learningLog,
+    {
+      id: `${matchId}-${Date.now()}`,
+      createdAt: new Date().toISOString(),
+      matchId,
+      summary: outcomeHit
+        ? `Engine calibration reinforced signals that matched the real result for Match ${matchId}.`
+        : `Engine calibration reduced signals that pointed away from the real result for Match ${matchId}.`,
+      factorChanges: factorChanges
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+        .slice(0, 4)
+        .map(
+          (entry) =>
+            `${formatAdaptiveFactorLabel(entry.key)} ${entry.delta >= 0 ? '+' : ''}${roundTo(entry.delta * 100, 2)}%`,
+        ),
+      bookmakerChanges: bookmakerChanges
+        .sort((left, right) => Math.abs(right.delta) - Math.abs(left.delta))
+        .slice(0, 4)
+        .map(
+          (entry) =>
+            `${findBookmakerSource(entry.key).label} ${entry.delta >= 0 ? '+' : ''}${roundTo(entry.delta * 100, 2)}%`,
+        ),
+    },
+  ].slice(-18)
+
+  return nextState
+}
+
 function findBookmakerSource(sourceKey: BookmakerSourceKey) {
   return bookmakerSources.find((source) => source.key === sourceKey) ?? bookmakerSources[0]
 }
 
-function getMarketBlendWeight(sourceKey: BookmakerSourceKey) {
-  switch (sourceKey) {
-    case 'betfair':
-      return 0.42
-    case 'pinnacle':
-      return 0.38
-    case 'fanduel':
-      return 0.26
-    case 'sts':
-      return 0.24
-    default:
-      return 0.3
-  }
+function getMarketBlendWeight(sourceKey: BookmakerSourceKey, adaptiveLearningState?: AdaptiveLearningState) {
+  const baseWeight =
+    sourceKey === 'betfair'
+      ? 0.42
+      : sourceKey === 'pinnacle'
+        ? 0.38
+        : sourceKey === 'fanduel'
+          ? 0.26
+          : sourceKey === 'sts'
+            ? 0.24
+            : 0.3
+  const trustWeight = adaptiveLearningState?.bookmakerWeights[sourceKey] ?? 1
+  const marketFactorWeight = adaptiveLearningState?.factorWeights.market ?? 1
+  return clamp(baseWeight * trustWeight * marketFactorWeight, 0.12, 0.62)
 }
 
-function blendPercent(modelPercent: number, marketPercent: number, sourceKey: BookmakerSourceKey) {
-  const weight = getMarketBlendWeight(sourceKey)
+function blendPercent(modelPercent: number, marketPercent: number, sourceKey: BookmakerSourceKey, adaptiveLearningState?: AdaptiveLearningState) {
+  const weight = getMarketBlendWeight(sourceKey, adaptiveLearningState)
   return modelPercent * (1 - weight) + marketPercent * weight
 }
 
@@ -1575,6 +1840,14 @@ function average(values: number[]) {
   return values.reduce((sum, value) => sum + value, 0) / values.length
 }
 
+function predictionModeLabelFromAdaptiveState(adaptiveLearningState?: AdaptiveLearningState) {
+  if (!adaptiveLearningState || adaptiveLearningState.processedActualMatchIds.length === 0) {
+    return 'seeded weights'
+  }
+
+  return `adaptive (${adaptiveLearningState.processedActualMatchIds.length} learned matches)`
+}
+
 function getConfederation(team: Team): Confederation {
   return confederationByTeamId[team.id] ?? 'UEFA'
 }
@@ -2049,6 +2322,7 @@ function predictMatch(
   context?: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'>,
   liveTeamForm?: Partial<Record<string, TeamLiveForm>>,
   teamDirectory?: Partial<Record<string, TeamDirectoryEntry>>,
+  adaptiveLearningState?: AdaptiveLearningState,
   options?: { knockout?: boolean; groupState?: GroupStateContext; marketSignal?: MarketConsensusSnapshot },
 ): Prediction {
   const ratingGap = homeTeam.rating - awayTeam.rating
@@ -2096,36 +2370,39 @@ function predictMatch(
   const peerOppositionSwing = matchupHistorySignals.peerPerformanceEdge
   const depthSwing = (homeSquadSignals.depthScore - awaySquadSignals.depthScore) * 0.08
   const disciplineSwing = (awaySquadSignals.disciplineRisk - homeSquadSignals.disciplineRisk) * 0.08
+  const factorWeights = adaptiveLearningState?.factorWeights ?? defaultAdaptiveFactorWeights
+  const weightedRatingEdge = (ratingGap / 90) * factorWeights.rating
+  const weightedProfileEdge =
+    (creationSwing * 0.18 + finishingSwing * 0.12 + setPieceSwing * 0.08 + experienceSwing * 0.05) * factorWeights.profile
+  const weightedRecentFormEdge = (recentFormSwing + scoringSwing + defensiveRecordSwing + cleanSheetSwing) * factorWeights.recentForm
+  const weightedInjuryEdge = injurySwing * factorWeights.injury
+  const weightedAbsenceEdge = availabilitySwing * factorWeights.absences
+  const weightedScheduleEdge = (restSwing + travelSwing) * factorWeights.schedule
+  const weightedRotationEdge = rotationSwing * factorWeights.rotation
+  const weightedMotivationEdge = motivationSwing * factorWeights.motivation
+  const weightedContinuityEdge = (continuitySwing + tacticalSwing) * factorWeights.continuity
+  const weightedMatchupEdge = (headToHeadSwing + peerOppositionSwing) * factorWeights.matchup
+  const weightedSquadDepthEdge = (depthSwing + disciplineSwing) * factorWeights.squadDepth
+  const weightedVenueEdge = (homeHostBoost - awayHostBoost * 0.4 + homeAltitudeAdjustment - awayAltitudeAdjustment * 0.35) * factorWeights.venue
+  const weightedDrawToleranceSwing = drawToleranceSwing * factorWeights.draw
   const homeExpectedGoals = clamp(
     1.18 +
       homeAttack * 0.62 -
       awayDefense * 0.33 +
-      ratingGap / 90 +
+      weightedRatingEdge +
       formSwing +
-      recentFormSwing +
-      scoringSwing +
-      defensiveRecordSwing +
-      cleanSheetSwing +
-      injurySwing +
-      availabilitySwing +
-      restSwing +
-      travelSwing +
-      rotationSwing +
-      motivationSwing +
-      continuitySwing +
-      tacticalSwing +
-      headToHeadSwing +
-      peerOppositionSwing +
-      depthSwing +
-      disciplineSwing +
-      creationSwing * 0.18 +
-      finishingSwing * 0.12 +
-      setPieceSwing * 0.08 +
-      experienceSwing * 0.05 -
+      weightedRecentFormEdge +
+      weightedInjuryEdge +
+      weightedAbsenceEdge +
+      weightedScheduleEdge +
+      weightedRotationEdge +
+      weightedMotivationEdge +
+      weightedContinuityEdge +
+      weightedMatchupEdge +
+      weightedSquadDepthEdge +
+      weightedProfileEdge -
       (awayProfile.defensiveShape - 1) * 0.12 +
-      homeHostBoost -
-      awayHostBoost * 0.4 +
-      homeAltitudeAdjustment,
+      weightedVenueEdge,
     0.2,
     3.8,
   )
@@ -2133,32 +2410,23 @@ function predictMatch(
     1.02 +
       awayAttack * 0.58 -
       homeDefense * 0.31 -
-      ratingGap / 105 -
+      weightedRatingEdge * 0.86 -
       formSwing * 0.7 +
-      recentFormSwing * -0.85 +
-      scoringSwing * -0.85 +
-      defensiveRecordSwing * -0.85 +
-      cleanSheetSwing * -0.9 +
-      injurySwing * -0.95 +
-      availabilitySwing * -0.92 +
-      restSwing * -0.95 +
-      travelSwing * -0.95 +
-      rotationSwing * -0.95 +
-      motivationSwing * -0.95 +
-      continuitySwing * -0.9 +
-      tacticalSwing * -0.88 +
-      headToHeadSwing * -0.85 +
-      peerOppositionSwing * -0.88 +
-      depthSwing * -0.82 +
-      disciplineSwing * -0.9 +
+      weightedRecentFormEdge * -0.88 +
+      weightedInjuryEdge * -0.95 +
+      weightedAbsenceEdge * -0.92 +
+      weightedScheduleEdge * -0.95 +
+      weightedRotationEdge * -0.95 +
+      weightedMotivationEdge * -0.95 +
+      weightedContinuityEdge * -0.9 +
+      weightedMatchupEdge * -0.86 +
+      weightedSquadDepthEdge * -0.86 +
       (awayProfile.chanceCreation - homeProfile.chanceCreation) * 0.17 +
       (awayProfile.finishing - homeProfile.finishing) * 0.12 +
       (awayProfile.setPieces - homeProfile.setPieces) * 0.08 +
       (awayProfile.tournamentExperience - homeProfile.tournamentExperience) * 0.05 -
       (homeProfile.defensiveShape - 1) * 0.12 +
-      awayHostBoost -
-      homeHostBoost * 0.45 +
-      awayAltitudeAdjustment,
+      (awayHostBoost - homeHostBoost * 0.45 + awayAltitudeAdjustment) * factorWeights.venue,
     0.15,
     3.4,
   )
@@ -2169,7 +2437,7 @@ function predictMatch(
   let bestScoreProbability = -1
   let homeGoals = 0
   let awayGoals = 0
-  const drawBiasMultiplier = clamp(1 + drawToleranceSwing * 4.5 + matchupHistorySignals.drawLean, 0.78, 1.3)
+  const drawBiasMultiplier = clamp(1 + weightedDrawToleranceSwing * 4.5 + matchupHistorySignals.drawLean, 0.78, 1.3)
   const decisiveBiasMultiplier = clamp(1 - drawToleranceSwing * 2.1, 0.88, 1.12)
 
   for (let homeGoalCount = 0; homeGoalCount <= 6; homeGoalCount += 1) {
@@ -2203,19 +2471,19 @@ function predictMatch(
   const marketSignal = options?.marketSignal
   const homeWinPercent = roundTo(
     marketSignal
-      ? blendPercent(normalizedHomeWinProbability * 100, marketSignal.homeProbability, marketSignal.sourceKeys[0] ?? 'betfair')
+      ? blendPercent(normalizedHomeWinProbability * 100, marketSignal.homeProbability, marketSignal.sourceKeys[0] ?? 'betfair', adaptiveLearningState)
       : normalizedHomeWinProbability * 100,
     1,
   )
   const drawPercent = roundTo(
     marketSignal
-      ? blendPercent(normalizedDrawProbability * 100, marketSignal.drawProbability, marketSignal.sourceKeys[0] ?? 'betfair')
+      ? blendPercent(normalizedDrawProbability * 100, marketSignal.drawProbability, marketSignal.sourceKeys[0] ?? 'betfair', adaptiveLearningState)
       : normalizedDrawProbability * 100,
     1,
   )
   const awayWinPercent = roundTo(
     marketSignal
-      ? blendPercent(normalizedAwayWinProbability * 100, marketSignal.awayProbability, marketSignal.sourceKeys[0] ?? 'betfair')
+      ? blendPercent(normalizedAwayWinProbability * 100, marketSignal.awayProbability, marketSignal.sourceKeys[0] ?? 'betfair', adaptiveLearningState)
       : normalizedAwayWinProbability * 100,
     1,
   )
@@ -2229,9 +2497,9 @@ function predictMatch(
   const confidence = clamp(
     Math.round(
         Math.max(finalHomeWinPercent, finalDrawPercent, finalAwayWinPercent) +
-        Math.abs(drawToleranceSwing) * 18 +
+        Math.abs(weightedDrawToleranceSwing) * 18 +
         Math.abs(motivationSwing) * 12 +
-        Math.abs(availabilitySwing + continuitySwing + headToHeadSwing + peerOppositionSwing) * 22 +
+        Math.abs(weightedAbsenceEdge + weightedContinuityEdge + weightedMatchupEdge) * 22 +
         (marketSignal ? 5 : 0),
     ),
     40,
@@ -2241,22 +2509,9 @@ function predictMatch(
     Math.round(
       58 +
         Math.abs(ratingGap) * 0.45 +
-        Math.abs(creationSwing + finishingSwing + defensiveSwing + experienceSwing) * 14 +
-        Math.abs(homeHostBoost - awayHostBoost) * 20 +
-        Math.abs(
-          recentFormSwing +
-            scoringSwing +
-            injurySwing +
-            availabilitySwing +
-            restSwing +
-            travelSwing +
-            rotationSwing +
-            motivationSwing +
-            continuitySwing +
-            tacticalSwing +
-            headToHeadSwing +
-            peerOppositionSwing,
-        ) * 18,
+        Math.abs(weightedProfileEdge) * 24 +
+        Math.abs(weightedVenueEdge) * 20 +
+        Math.abs(weightedRecentFormEdge + weightedInjuryEdge + weightedAbsenceEdge + weightedScheduleEdge + weightedRotationEdge + weightedMotivationEdge + weightedContinuityEdge + weightedMatchupEdge) * 18,
     ),
     50,
     94,
@@ -2316,6 +2571,14 @@ function predictMatch(
     { label: 'Draw tolerance swing', impact: drawToleranceSwing },
     { label: 'Market odds edge', impact: marketSignal ? (marketSignal.homeProbability - marketSignal.awayProbability) / 100 : 0 },
     { label: 'Venue and altitude edge', impact: homeHostBoost - awayHostBoost * 0.4 + homeAltitudeAdjustment - awayAltitudeAdjustment * 0.35 },
+    {
+      label: 'Adaptive calibration',
+      impact: roundTo(
+        average(Object.values(factorWeights)) - 1 +
+          (marketSignal ? (adaptiveLearningState?.bookmakerWeights[marketSignal.sourceKeys[0] ?? 'betfair'] ?? 1) - 1 : 0),
+        3,
+      ),
+    },
   ]
     .sort((left, right) => Math.abs(right.impact) - Math.abs(left.impact))
     .map((factor) => ({
@@ -2364,6 +2627,10 @@ function predictMatch(
     {
       label: 'Market source',
       value: marketSignal ? `${marketSignal.sourceLabel} (${marketSignal.homeProbability}% / ${marketSignal.drawProbability}% / ${marketSignal.awayProbability}%)` : 'not applied',
+    },
+    {
+      label: 'Adaptive learning',
+      value: `${predictionModeLabelFromAdaptiveState(adaptiveLearningState)} / avg factor ${roundTo(average(Object.values(factorWeights)), 2)}`,
     },
     {
       label: 'Group stakes',
@@ -2685,6 +2952,7 @@ function runDetailedSimulation(
   context: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'> | undefined,
   liveTeamForm: Partial<Record<string, TeamLiveForm>>,
   teamDirectory: Partial<Record<string, TeamDirectoryEntry>>,
+  adaptiveLearningState: AdaptiveLearningState,
   marketSignal: MarketConsensusSnapshot | undefined,
   groupState: GroupStateContext | undefined,
 ): DetailedSimulationReport {
@@ -2696,6 +2964,7 @@ function runDetailedSimulation(
     context,
     liveTeamForm,
     teamDirectory,
+    adaptiveLearningState,
     {
       knockout: stage === 'knockout',
       groupState,
@@ -3434,6 +3703,9 @@ function App() {
   const [simulationRunCount, setSimulationRunCount] = useState<number>(10000)
   const [simulationReport, setSimulationReport] = useState<DetailedSimulationReport | null>(null)
   const [isRunningSimulation, setIsRunningSimulation] = useState(false)
+  const [adaptiveLearningState, setAdaptiveLearningState] = useState<AdaptiveLearningState>(() =>
+    normalizeAdaptiveLearningState(loadStoredState<AdaptiveLearningState>(storageKeys.adaptiveLearning)),
+  )
   const [phaseAwardPredictions, setPhaseAwardPredictions] = useState<
     Partial<Record<PhaseKey, Partial<Record<PhaseAwardKey, PhaseAwardSnapshot>>>>
   >(() => loadStoredState<Partial<Record<PhaseKey, Partial<Record<PhaseAwardKey, PhaseAwardSnapshot>>>>>(storageKeys.phaseAwards) ?? {})
@@ -3482,6 +3754,17 @@ function App() {
   )
   const acceptedCount = matches.filter((match) => match.acceptedPrediction).length
   const acceptedKnockoutCount = displayKnockoutMatches.filter((match) => match.acceptedPrediction).length
+  const topAdaptiveFactors = Object.entries(adaptiveLearningState.factorWeights)
+    .sort((left, right) => Math.abs(right[1] - 1) - Math.abs(left[1] - 1))
+    .slice(0, 3)
+  const topAdaptiveBookmakers = Object.entries(adaptiveLearningState.bookmakerWeights)
+    .sort((left, right) => Math.abs(right[1] - 1) - Math.abs(left[1] - 1))
+    .slice(0, 3)
+  const currentSimulationAcceptedPrediction = simulationFocus
+    ? simulationFocus.stage === 'group'
+      ? matches.find((match) => match.id === simulationFocus.matchId)?.acceptedPrediction
+      : displayKnockoutMatches.find((match) => match.id === simulationFocus.matchId)?.acceptedPrediction
+    : undefined
   const viewerTimeZone = getViewerTimeZone()
   const latestLiveRefresh = Object.values(liveTeamForm)
     .map((entry) => (entry?.refreshedAt ? new Date(entry.refreshedAt).getTime() : 0))
@@ -3765,6 +4048,7 @@ function App() {
         phaseMatch.context,
         liveTeamForm,
         teamDirectory,
+        adaptiveLearningState,
         {
           knockout: phaseMatch.knockout,
           groupState: phaseMatch.groupState,
@@ -3876,6 +4160,44 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(storageKeys.phaseAwards, JSON.stringify(phaseAwardPredictions))
   }, [phaseAwardPredictions])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.adaptiveLearning, JSON.stringify(adaptiveLearningState))
+  }, [adaptiveLearningState])
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      setAdaptiveLearningState((currentState) => {
+        let nextState = currentState
+
+        matches.forEach((match) => {
+          const actualResult = marketApiState.actualResultsByMatchId[match.id]
+          const prediction = match.acceptedPrediction ?? match.prediction
+
+          if (!actualResult || !prediction) {
+            return
+          }
+
+          nextState = learnFromPredictionResult(nextState, match.id, prediction, actualResult, marketApiState.oddsByMatchId[match.id])
+        })
+
+        displayKnockoutMatches.forEach((match) => {
+          const actualResult = marketApiState.actualResultsByMatchId[match.id]
+          const prediction = match.acceptedPrediction ?? match.prediction
+
+          if (!actualResult || !prediction) {
+            return
+          }
+
+          nextState = learnFromPredictionResult(nextState, match.id, prediction, actualResult, marketApiState.oddsByMatchId[match.id])
+        })
+
+        return JSON.stringify(nextState) === JSON.stringify(currentState) ? currentState : nextState
+      })
+    }, 0)
+
+    return () => window.clearTimeout(timeoutId)
+  }, [marketApiState.actualResultsByMatchId, marketApiState.oddsByMatchId, matches, displayKnockoutMatches])
 
   useEffect(() => {
     void fetchMarketStateFromBackend()
@@ -4049,6 +4371,7 @@ function App() {
           match,
           liveTeamForm,
           teamDirectory,
+          adaptiveLearningState,
           marketApiState.consensusByMatchId[match.id],
           getGroupStateContext(match, matches),
         )
@@ -4079,6 +4402,7 @@ function App() {
           : undefined,
         liveTeamForm,
         teamDirectory,
+        adaptiveLearningState,
         marketApiState.consensusByMatchId[resolvedMatch.match.id],
         undefined,
       )
@@ -4164,6 +4488,22 @@ function App() {
     }
   }
 
+  function handleGoBackFromSimulation() {
+    if (!simulationFocus) {
+      setActiveView('group')
+      return
+    }
+
+    if (simulationFocus.stage === 'group') {
+      setActiveView('group')
+      scrollToElementById(`group-match-${simulationFocus.matchId}`)
+      return
+    }
+
+    setActiveView('bracket')
+    scrollToElementById(`knockout-match-${simulationFocus.matchId}`)
+  }
+
   function handleTryToPredictPhaseAward(phaseKey: PhaseKey, awardKey: PhaseAwardKey) {
     const snapshot = buildEngineAwardSnapshot(phaseKey, awardKey)
 
@@ -4178,6 +4518,11 @@ function App() {
         [awardKey]: snapshot,
       },
     }))
+  }
+
+  function handleResetEngineLearning() {
+    window.localStorage.removeItem(storageKeys.adaptiveLearning)
+    setAdaptiveLearningState(defaultAdaptiveLearningState)
   }
 
   function renderPhaseAwards(phaseKey: PhaseKey, phaseTitle: string, phaseNote: string) {
@@ -4476,7 +4821,7 @@ function App() {
           ? (() => {
               const nextAttempt = (match.predictionAttempt ?? 0) + 1
               const groupState = getGroupStateContext(match, currentMatches)
-              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, teamDirectory, {
+              const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, teamDirectory, adaptiveLearningState, {
                 groupState,
                 marketSignal: marketApiState.consensusByMatchId[match.id],
               })
@@ -4509,7 +4854,7 @@ function App() {
 
         const nextAttempt = (match.predictionAttempt ?? 0) + 1
         const groupState = getGroupStateContext(match, currentMatches)
-        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, teamDirectory, {
+        const prediction = predictMatch(match.homeTeam, match.awayTeam, match.venueCity, nextAttempt, match, liveTeamForm, teamDirectory, adaptiveLearningState, {
           groupState,
           marketSignal: marketApiState.consensusByMatchId[match.id],
         })
@@ -4716,6 +5061,7 @@ function App() {
                   : undefined,
                 liveTeamForm,
                 teamDirectory,
+                adaptiveLearningState,
                 {
                   knockout: true,
                   marketSignal: marketApiState.consensusByMatchId[match.id],
@@ -4772,6 +5118,7 @@ function App() {
             : undefined,
           liveTeamForm,
           teamDirectory,
+          adaptiveLearningState,
           {
             knockout: true,
             marketSignal: marketApiState.consensusByMatchId[match.id],
@@ -4980,6 +5327,7 @@ function App() {
     window.localStorage.removeItem(storageKeys.liveTeamForm)
     window.localStorage.removeItem(storageKeys.teamDirectory)
     window.localStorage.removeItem(storageKeys.phaseAwards)
+    window.localStorage.removeItem(storageKeys.adaptiveLearning)
     window.localStorage.removeItem('world-cup-betting-system/team-sort-mode')
     window.localStorage.removeItem('world-cup-betting-system/active-team-id')
     setMatches(createInitialMatches())
@@ -4989,6 +5337,7 @@ function App() {
     setTeamSortMode('group')
     setActiveTeamId(groupDefinitions[0]?.teams[0]?.id ?? '')
     setPhaseAwardPredictions({})
+    setAdaptiveLearningState(defaultAdaptiveLearningState)
     setLiveTeamForm({})
     setTeamDirectory({})
     setLiveDataState(defaultLiveDataState)
@@ -5212,6 +5561,65 @@ function App() {
             <p className="hero-status-copy">{marketApiState.marketStatus}</p>
             <p className="hero-status-copy">{marketApiState.actualResultStatus}</p>
             <p className="hero-status-copy">{marketApiState.stsStatus}</p>
+            <div className="learning-status-box">
+              <div>
+                <span>Engine learning status</span>
+                <strong>{adaptiveLearningState.processedActualMatchIds.length} real matches learned</strong>
+              </div>
+              <div>
+                <span>Top factor shifts</span>
+                <strong>
+                  {topAdaptiveFactors
+                    .map(([key, value]) => `${formatAdaptiveFactorLabel(key as AdaptiveFactorKey)} ${value >= 1 ? '+' : ''}${roundTo((value - 1) * 100, 1)}%`)
+                    .join(' / ')}
+                </strong>
+              </div>
+              <div>
+                <span>Bookmaker trust shifts</span>
+                <strong>
+                  {topAdaptiveBookmakers
+                    .map(([key, value]) => `${findBookmakerSource(key as BookmakerSourceKey).shortLabel} ${value >= 1 ? '+' : ''}${roundTo((value - 1) * 100, 1)}%`)
+                    .join(' / ')}
+                </strong>
+              </div>
+              <div className="learning-status-actions">
+                <button
+                  type="button"
+                  className="secondary-button compact-button"
+                  onClick={handleResetEngineLearning}
+                >
+                  Reset engine learning
+                </button>
+              </div>
+            </div>
+            <details className="learning-log-details">
+              <summary className="prediction-summary">Learning log per match</summary>
+              <div className="learning-log-list">
+                {adaptiveLearningState.learningLog.length > 0 ? (
+                  [...adaptiveLearningState.learningLog]
+                    .slice(-8)
+                    .reverse()
+                    .map((entry) => (
+                      <article key={entry.id} className="learning-log-item">
+                        <span>{new Intl.DateTimeFormat('en-GB', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(entry.createdAt))}</span>
+                        <strong>{entry.matchId}</strong>
+                        <p>{entry.summary}</p>
+                        <small>
+                          Factors: {entry.factorChanges.length > 0 ? entry.factorChanges.join(' / ') : 'No factor shift recorded.'}
+                        </small>
+                        <small>
+                          Bookmakers: {entry.bookmakerChanges.length > 0 ? entry.bookmakerChanges.join(' / ') : 'No bookmaker shift recorded.'}
+                        </small>
+                      </article>
+                    ))
+                ) : (
+                  <div className="learning-log-item">
+                    <strong>No learned matches yet</strong>
+                    <p>Once real results arrive and the engine compares them with stored predictions, the per-match learning log will appear here.</p>
+                  </div>
+                )}
+              </div>
+            </details>
             <div className="odds-api-usage-box">
               <div>
                 <span>Credits remaining</span>
@@ -6025,6 +6433,10 @@ function App() {
                   <h3>{simulationFocus.homeTeamName} vs {simulationFocus.awayTeamName}</h3>
                   <p>{simulationFocus.label}</p>
                   <p>Venue: {simulationFocus.venue}</p>
+                  <div className="simulation-current-accepted-box">
+                    <span>Current accepted prediction</span>
+                    <strong>{formatPredictionScore(currentSimulationAcceptedPrediction) || 'No accepted result yet'}</strong>
+                  </div>
                   <p>
                     Rules:{' '}
                     <strong>
@@ -6096,6 +6508,9 @@ function App() {
                   <div className="action-row">
                     <button type="button" className="secondary-button" onClick={() => handleImportSimulationResult('prediction')}>
                       Import as prediction
+                    </button>
+                    <button type="button" className="secondary-button" onClick={handleGoBackFromSimulation}>
+                      Go back without import
                     </button>
                     <button type="button" className="primary-button" onClick={() => handleImportSimulationResult('accepted')}>
                       Import and accept
