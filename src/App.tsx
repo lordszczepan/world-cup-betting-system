@@ -3,9 +3,10 @@ import './App.css'
 import { getAnnexCAssignment } from './annexC'
 import { knockoutScheduleByMatchId, type KnockoutScheduleItem } from './knockoutSchedule'
 
-type ViewMode = 'group' | 'bracket' | 'teams' | 'simulation'
+type ViewMode = 'group' | 'bracket' | 'matchDays' | 'teams' | 'simulation'
 type StandingsMode = 'prediction' | 'real'
 type TeamSortMode = 'alphabetical' | 'ranking' | 'group'
+type MatchDayTimeMode = 'local' | 'viewer'
 type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
 type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
 type PhaseAwardKey = 'goalMachine' | 'disastrousDefence' | 'cardKings' | 'nobleEleven'
@@ -48,6 +49,25 @@ type DetailedSimulationReport = {
   scorelineHeatmap: Array<{ homeGoals: string; awayGoals: string; share: number }>
   phaseFlow: Array<{ label: string; share: number }>
   notes: string[]
+}
+
+type MatchDayItem = {
+  id: string
+  stage: 'group' | 'knockout'
+  stageLabel: string
+  kickoffUtc: string
+  localDateLabel: string
+  localTimeLabel: string
+  viewerDateLabel: string
+  viewerTimeLabel: string
+  homeTeamName: string
+  awayTeamName: string
+  homeFlagUrl?: string
+  awayFlagUrl?: string
+  predictionScore: string
+  acceptedScore: string
+  actualScore: string
+  actualSourceLabel: string
 }
 
 type PhaseAwardSnapshot = {
@@ -820,6 +840,7 @@ const storageKeys = {
   knockoutMatches: 'world-cup-betting-system/knockout-matches',
   activeView: 'world-cup-betting-system/active-view',
   standingsMode: 'world-cup-betting-system/standings-mode',
+  matchDayTimeMode: 'world-cup-betting-system/match-day-time-mode',
   liveTeamForm: 'world-cup-betting-system/live-team-form',
   teamDirectory: 'world-cup-betting-system/team-directory',
   phaseAwards: 'world-cup-betting-system/phase-awards',
@@ -3718,6 +3739,7 @@ function App() {
   )
   const [activeView, setActiveView] = useState<ViewMode>(() => loadStoredState<ViewMode>(storageKeys.activeView) ?? 'group')
   const [standingsMode, setStandingsMode] = useState<StandingsMode>(() => loadStoredState<StandingsMode>(storageKeys.standingsMode) ?? 'prediction')
+  const [matchDayTimeMode, setMatchDayTimeMode] = useState<MatchDayTimeMode>(() => loadStoredState<MatchDayTimeMode>(storageKeys.matchDayTimeMode) ?? 'viewer')
   const [teamSortMode, setTeamSortMode] = useState<TeamSortMode>(() => loadStoredState<TeamSortMode>('world-cup-betting-system/team-sort-mode') ?? 'group')
   const [activeTeamId, setActiveTeamId] = useState<string>(
     () => loadStoredState<string>('world-cup-betting-system/active-team-id') ?? (groupDefinitions[0]?.teams[0]?.id ?? ''),
@@ -3834,10 +3856,83 @@ function App() {
   const activeTeamDirectory = activeTeam ? teamDirectory[activeTeam.id] : undefined
   const knockoutStageConfig = knockoutStageConfigStatic
   const roundOf32Preview = buildRoundOf32(activeStandings, rankedThirds)
+  const matchDayItems = [
+    ...matches.map((match) => {
+      const viewerDateTime = formatViewerDateTime(new Date(match.kickoffUtc))
+      const actualResult = marketApiState.actualResultsByMatchId[match.id]
+
+      return {
+        id: match.id,
+        stage: 'group' as const,
+        stageLabel: `Group ${match.group}`,
+        kickoffUtc: match.kickoffUtc,
+        localDateLabel: match.localDateLabel,
+        localTimeLabel: match.localTimeLabel,
+        viewerDateLabel: viewerDateTime.dateLabel,
+        viewerTimeLabel: viewerDateTime.timeLabel,
+        homeTeamName: match.homeTeam.name,
+        awayTeamName: match.awayTeam.name,
+        homeFlagUrl: getFlagUrl(match.homeTeam),
+        awayFlagUrl: getFlagUrl(match.awayTeam),
+        predictionScore: formatPredictionScore(match.prediction),
+        acceptedScore: formatPredictionScore(match.acceptedPrediction),
+        actualScore: actualResult ? `${actualResult.homeGoals} : ${actualResult.awayGoals}` : '',
+        actualSourceLabel: actualResult?.sourceLabel ?? '',
+      }
+    }),
+    ...resolvedKnockoutMatches
+      .filter((resolvedMatch) => resolvedMatch.homeTeam && resolvedMatch.awayTeam && resolvedMatch.schedule)
+      .map((resolvedMatch) => {
+        const viewerDateTime = formatViewerDateTime(new Date(resolvedMatch.schedule!.kickoffUtc))
+        const actualResult = marketApiState.actualResultsByMatchId[resolvedMatch.match.id]
+
+        return {
+          id: resolvedMatch.match.id,
+          stage: 'knockout' as const,
+          stageLabel: knockoutStageConfig.find((item) => item.stage === resolvedMatch.match.stage)?.title ?? 'Knockout stage',
+          kickoffUtc: resolvedMatch.schedule!.kickoffUtc,
+          localDateLabel: resolvedMatch.schedule!.localDateLabel,
+          localTimeLabel: resolvedMatch.schedule!.localTimeLabel,
+          viewerDateLabel: viewerDateTime.dateLabel,
+          viewerTimeLabel: viewerDateTime.timeLabel,
+          homeTeamName: resolvedMatch.homeTeam!.name,
+          awayTeamName: resolvedMatch.awayTeam!.name,
+          homeFlagUrl: getFlagUrl(resolvedMatch.homeTeam!),
+          awayFlagUrl: getFlagUrl(resolvedMatch.awayTeam!),
+          predictionScore: formatPredictionScore(resolvedMatch.match.prediction),
+          acceptedScore: formatPredictionScore(resolvedMatch.match.acceptedPrediction),
+          actualScore: actualResult ? `${actualResult.homeGoals} : ${actualResult.awayGoals}` : '',
+          actualSourceLabel: actualResult?.sourceLabel ?? '',
+        }
+      }),
+  ].sort((left, right) => new Date(left.kickoffUtc).getTime() - new Date(right.kickoffUtc).getTime())
+  const matchDaySections = matchDayItems.reduce<Array<{ dateLabel: string; matches: MatchDayItem[] }>>((sections, item) => {
+    const dateLabel = matchDayTimeMode === 'local' ? item.localDateLabel : item.viewerDateLabel
+    const lastSection = sections[sections.length - 1]
+
+    if (!lastSection || lastSection.dateLabel !== dateLabel) {
+      sections.push({ dateLabel, matches: [item] })
+      return sections
+    }
+
+    lastSection.matches.push(item)
+    return sections
+  }, [])
 
   function handleJumpToKnockoutMatch(matchId: string) {
     setActiveView('bracket')
     scrollToElementById(`knockout-match-${matchId}`)
+  }
+
+  function handleOpenMatchFromMatchDays(matchDayItem: MatchDayItem) {
+    if (matchDayItem.stage === 'group') {
+      setActiveView('group')
+      scrollToElementById(`group-match-${matchDayItem.id}`)
+      return
+    }
+
+    setActiveView('bracket')
+    scrollToElementById(`knockout-match-${matchDayItem.id}`)
   }
 
   function getPhaseOrderIndex(phaseKey: PhaseKey) {
@@ -4163,6 +4258,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(storageKeys.standingsMode, JSON.stringify(standingsMode))
   }, [standingsMode])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.matchDayTimeMode, JSON.stringify(matchDayTimeMode))
+  }, [matchDayTimeMode])
 
   useEffect(() => {
     window.localStorage.setItem('world-cup-betting-system/team-sort-mode', JSON.stringify(teamSortMode))
@@ -5347,6 +5446,7 @@ function App() {
     window.localStorage.removeItem(storageKeys.knockoutMatches)
     window.localStorage.removeItem(storageKeys.activeView)
     window.localStorage.removeItem(storageKeys.standingsMode)
+    window.localStorage.removeItem(storageKeys.matchDayTimeMode)
     window.localStorage.removeItem(storageKeys.liveTeamForm)
     window.localStorage.removeItem(storageKeys.teamDirectory)
     window.localStorage.removeItem(storageKeys.phaseAwards)
@@ -5357,6 +5457,7 @@ function App() {
     setKnockoutMatches(createInitialKnockoutMatches())
     setActiveView('group')
     setStandingsMode('prediction')
+    setMatchDayTimeMode('viewer')
     setTeamSortMode('group')
     setActiveTeamId(groupDefinitions[0]?.teams[0]?.id ?? '')
     setPhaseAwardPredictions({})
@@ -5809,6 +5910,13 @@ function App() {
           onClick={() => setActiveView('bracket')}
         >
           Bracket Phase
+        </button>
+        <button
+          type="button"
+          className={`tab-button ${activeView === 'matchDays' ? 'tab-button-active' : ''}`}
+          onClick={() => setActiveView('matchDays')}
+        >
+          Match Days
         </button>
         <button
           type="button"
@@ -6434,6 +6542,93 @@ function App() {
             )
           })}
         </>
+      ) : activeView === 'matchDays' ? (
+        <section className="panel">
+          <div className="section-header">
+            <div>
+              <p className="eyebrow">Calendar view</p>
+              <h2>Match days</h2>
+              <p>Read-only schedule ordered by kickoff time, with your saved prediction, accepted score and real result side by side.</p>
+            </div>
+            <div className="standings-mode-switcher" aria-label="Choose schedule time zone">
+              <button
+                type="button"
+                className={`tab-button ${matchDayTimeMode === 'local' ? 'tab-button-active' : ''}`}
+                onClick={() => setMatchDayTimeMode('local')}
+              >
+                Local
+              </button>
+              <button
+                type="button"
+                className={`tab-button ${matchDayTimeMode === 'viewer' ? 'tab-button-active' : ''}`}
+                onClick={() => setMatchDayTimeMode('viewer')}
+              >
+                Your time zone
+              </button>
+            </div>
+          </div>
+
+          <div className="match-day-sections">
+            {matchDaySections.map((section) => (
+              <article key={section.dateLabel} className="match-day-section">
+                <h3>{section.dateLabel}</h3>
+                <div className="match-day-list">
+                  {section.matches.map((item) => (
+                    <div key={item.stage + item.id} className="match-day-row">
+                      <div className="match-day-time-block">
+                        <strong>{matchDayTimeMode === 'local' ? item.localTimeLabel : item.viewerTimeLabel}</strong>
+                        <span>{item.stageLabel}</span>
+                      </div>
+
+                      <div className="match-day-teams-block">
+                        <div className="match-day-team-line">
+                          {item.homeFlagUrl ? (
+                            <img className="team-flag" src={item.homeFlagUrl} alt={`Flag of ${item.homeTeamName}`} />
+                          ) : (
+                            <span className="team-flag team-flag-placeholder" aria-hidden="true"></span>
+                          )}
+                          <strong>{item.homeTeamName}</strong>
+                        </div>
+                        <div className="match-day-team-line">
+                          {item.awayFlagUrl ? (
+                            <img className="team-flag" src={item.awayFlagUrl} alt={`Flag of ${item.awayTeamName}`} />
+                          ) : (
+                            <span className="team-flag team-flag-placeholder" aria-hidden="true"></span>
+                          )}
+                          <strong>{item.awayTeamName}</strong>
+                        </div>
+                      </div>
+
+                      <div className="match-day-score-stack" aria-label={`Saved scores for ${item.homeTeamName} vs ${item.awayTeamName}`}>
+                        <div className="match-day-score-line">
+                          <span>Prediction</span>
+                          <strong>{item.predictionScore || '- : -'}</strong>
+                        </div>
+                        <div className="match-day-score-line">
+                          <span>Accepted</span>
+                          <strong>{item.acceptedScore || '- : -'}</strong>
+                        </div>
+                        <div className="match-day-score-line">
+                          <span>Actual</span>
+                          <strong>{item.actualScore || '- : -'}</strong>
+                        </div>
+                        {item.actualSourceLabel ? <small>{item.actualSourceLabel}</small> : null}
+                      </div>
+
+                      <button
+                        type="button"
+                        className="secondary-button compact-button match-day-open-button"
+                        onClick={() => handleOpenMatchFromMatchDays(item)}
+                      >
+                        Open details
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
       ) : activeView === 'simulation' ? (
         <section className="panel">
           <div className="section-header">
