@@ -143,6 +143,11 @@
   color: var(--muted);
 }
 
+.phase-award-button {
+  margin-top: 10px;
+  width: fit-content;
+}
+
 .simulation-layout {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin-bottom: 18px;
@@ -150,6 +155,142 @@
 
 .simulation-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.simulation-grid-two-wide {
+  margin-top: 18px;
+}
+
+.simulation-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+  margin: 14px 0 0;
+}
+
+.simulation-control-field {
+  display: grid;
+  gap: 6px;
+}
+
+.simulation-control-field span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.simulation-control-field select {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 12px;
+  background: white;
+  color: var(--text-strong);
+  font: inherit;
+}
+
+.simulation-bar-list,
+.simulation-scoreline-list {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.simulation-bar-row,
+.simulation-scoreline-item {
+  display: grid;
+  gap: 6px;
+}
+
+.simulation-bar-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.simulation-bar-track {
+  height: 12px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(8, 28, 54, 0.08);
+}
+
+.simulation-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #0f766e, #f59e0b);
+}
+
+.simulation-bar-fill-alt {
+  background: linear-gradient(90deg, #0b4f6c, #14b8a6);
+}
+
+.simulation-scoreline-item {
+  grid-template-columns: auto auto;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(249, 246, 238, 0.96);
+}
+
+.simulation-scoreline-item small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+
+.simulation-heatmap-wrap {
+  margin-top: 10px;
+}
+
+.simulation-heatmap-labels,
+.simulation-heatmap-row {
+  display: grid;
+  grid-template-columns: 44px repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.simulation-heatmap-labels {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.simulation-heatmap-row + .simulation-heatmap-row {
+  margin-top: 6px;
+}
+
+.simulation-heatmap-axis {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  background: rgba(8, 28, 54, 0.05);
+  color: var(--text-strong);
+  font-weight: 800;
+  min-height: 42px;
+}
+
+.simulation-heatmap-cell {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 42px;
+  border-radius: 12px;
+  border: 1px solid rgba(8, 28, 54, 0.08);
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.simulation-heatmap-caption {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.84rem;
 }
 
 .hero-refresh-panel {
@@ -1475,6 +1616,10 @@ tbody tr:last-child td {
   }
 
   .odds-api-usage-box {
+    grid-template-columns: 1fr;
+  }
+
+  .simulation-controls {
     grid-template-columns: 1fr;
   }
 

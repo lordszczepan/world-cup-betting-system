@@ -9,6 +9,7 @@ type TeamSortMode = 'alphabetical' | 'ranking' | 'group'
 type BookmakerSourceKey = 'betfair' | 'pinnacle' | 'fanduel' | 'sts'
 type BrokerSlotKey = 'broker1' | 'broker2' | 'broker3'
 type PhaseAwardKey = 'goalMachine' | 'disastrousDefence' | 'cardKings' | 'nobleEleven'
+type PhaseKey = 'group' | KnockoutStage
 
 type SimulationFocus = {
   stage: 'group' | 'knockout'
@@ -17,6 +18,29 @@ type SimulationFocus = {
   homeTeamName: string
   awayTeamName: string
   venue: string
+}
+
+type DetailedSimulationReport = {
+  stage: 'group' | 'knockout'
+  iterations: number
+  homeTeamName: string
+  awayTeamName: string
+  venue: string
+  recommendedPrediction: Prediction
+  topScorelines: Array<{ label: string; count: number; share: number }>
+  summaryMetrics: Array<{ label: string; value: string }>
+  chartBars: Array<{ label: string; share: number }>
+  scorelineHeatmap: Array<{ homeGoals: string; awayGoals: string; share: number }>
+  phaseFlow: Array<{ label: string; share: number }>
+  notes: string[]
+}
+
+type PhaseAwardSnapshot = {
+  teamId: string
+  teamName: string
+  value: number
+  confidence: number
+  summary: string
 }
 
 type TeamModelProfile = {
@@ -767,6 +791,7 @@ const storageKeys = {
   standingsMode: 'world-cup-betting-system/standings-mode',
   liveTeamForm: 'world-cup-betting-system/live-team-form',
   teamDirectory: 'world-cup-betting-system/team-directory',
+  phaseAwards: 'world-cup-betting-system/phase-awards',
 } as const
 
 const TEAM_DATA_STALE_AFTER_MS = 1000 * 60 * 60 * 12
@@ -808,6 +833,8 @@ const phaseAwardDefinitions: { key: PhaseAwardKey; title: string; description: s
   { key: 'cardKings', title: 'Card Kings', description: 'Most cards collected in this phase.' },
   { key: 'nobleEleven', title: 'Noble Eleven', description: 'Fewest cards collected in this phase.' },
 ]
+
+const phaseKeyOrder: PhaseKey[] = ['group', 'roundOf32', 'roundOf16', 'quarterFinals', 'semiFinals', 'thirdPlace', 'final']
 
 const defaultLiveDataState: LiveDataState = {
   liveTeamFormById: {},
@@ -951,6 +978,15 @@ const knockoutMatchTemplates: Omit<KnockoutMatch, 'prediction' | 'acceptedPredic
     homeSlot: 'W101',
     awaySlot: 'W102',
   },
+]
+
+const knockoutStageConfigStatic: { stage: KnockoutStage; title: string; subtitle: string }[] = [
+  { stage: 'roundOf32', title: 'Round of 32', subtitle: '32 teams enter the bracket here.' },
+  { stage: 'roundOf16', title: 'Round of 16', subtitle: 'Winners from the opening knockout round.' },
+  { stage: 'quarterFinals', title: 'Quarter-finals', subtitle: 'The last eight teams.' },
+  { stage: 'semiFinals', title: 'Semi-finals', subtitle: 'Four teams remain.' },
+  { stage: 'thirdPlace', title: 'Third-place match', subtitle: 'Losers of the semi-finals.' },
+  { stage: 'final', title: 'Final', subtitle: 'The tournament decider.' },
 ]
 
 function parseEtDateTime(dateLabel: string, etLabel: string) {
@@ -1795,6 +1831,216 @@ function poissonProbability(goals: number, lambda: number) {
   return (Math.exp(-lambda) * lambda ** goals) / factorial
 }
 
+function samplePoissonGoals(lambda: number) {
+  const limit = Math.exp(-Math.max(lambda, 0.01))
+  let product = 1
+  let goals = -1
+
+  do {
+    goals += 1
+    product *= Math.random()
+  } while (product > limit && goals < 12)
+
+  return goals
+}
+
+function getSimulationPenaltyEdge(homeTeam: Team, awayTeam: Team, homeEntry: TeamDirectoryEntry | undefined, awayEntry: TeamDirectoryEntry | undefined) {
+  const homeSignals = getTeamSquadSignals(homeTeam, homeEntry)
+  const awaySignals = getTeamSquadSignals(awayTeam, awayEntry)
+  return (
+    (homeSignals.penaltyUnitScore - awaySignals.penaltyUnitScore) * 0.95 +
+    (homeSignals.goalkeeperScore - awaySignals.goalkeeperScore) * 0.75 +
+    (homeSignals.coreContinuityScore - awaySignals.coreContinuityScore) * 0.2 +
+    (homeTeam.rating - awayTeam.rating) / 180
+  )
+}
+
+function buildDetailedSimulationPrediction(
+  basePrediction: Prediction,
+  stage: 'group' | 'knockout',
+  homeTeam: Team,
+  awayTeam: Team,
+  summary: {
+    iterations: number
+    regularHomeWins: number
+    regularDraws: number
+    regularAwayWins: number
+    knockoutHomeWins: number
+    knockoutAwayWins: number
+    extraTimeCount: number
+    penaltiesCount: number
+    scorelineCounts: Map<string, number>
+    averageHomeGoals: number
+    averageAwayGoals: number
+    marketSourceKey?: BookmakerSourceKey
+  },
+): DetailedSimulationReport {
+  const topScoreEntries = [...summary.scorelineCounts.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 5)
+  const [recommendedScoreline, recommendedCount] = topScoreEntries[0] ?? [`${basePrediction.homeGoals}-${basePrediction.awayGoals}`, 0]
+  const [recommendedHomeGoalsText, recommendedAwayGoalsText] = recommendedScoreline.split('-')
+  const recommendedHomeGoals = Number(recommendedHomeGoalsText)
+  const recommendedAwayGoals = Number(recommendedAwayGoalsText)
+  const regularHomeWinProbability = roundTo((summary.regularHomeWins / summary.iterations) * 100, 1)
+  const regularDrawProbability = roundTo((summary.regularDraws / summary.iterations) * 100, 1)
+  const regularAwayWinProbability = roundTo((summary.regularAwayWins / summary.iterations) * 100, 1)
+  const knockoutHomeWinProbability =
+    stage === 'knockout' ? roundTo((summary.knockoutHomeWins / summary.iterations) * 100, 1) : regularHomeWinProbability
+  const knockoutAwayWinProbability =
+    stage === 'knockout' ? roundTo((summary.knockoutAwayWins / summary.iterations) * 100, 1) : regularAwayWinProbability
+  const topScoreShare = recommendedCount > 0 ? recommendedCount / summary.iterations : 0
+  const recommendedKnockoutWinner =
+    stage === 'knockout'
+      ? knockoutHomeWinProbability >= knockoutAwayWinProbability
+        ? homeTeam.id
+        : awayTeam.id
+      : undefined
+  const recommendedKnockoutResolution =
+    stage === 'knockout'
+      ? summary.penaltiesCount / summary.iterations >= 0.18
+        ? 'penalties'
+        : summary.extraTimeCount / summary.iterations >= 0.16
+          ? 'extraTime'
+          : 'regularTime'
+      : undefined
+  const confidence =
+    stage === 'knockout'
+      ? clamp(Math.round(Math.max(knockoutHomeWinProbability, knockoutAwayWinProbability) + topScoreShare * 100 * 0.55), 45, 97)
+      : clamp(Math.round(Math.max(regularHomeWinProbability, regularDrawProbability, regularAwayWinProbability) + topScoreShare * 100 * 0.55), 45, 95)
+  const factorBreakdown: PredictionFactor[] = [
+    { label: 'Simulation home win share', impact: roundTo(knockoutHomeWinProbability / 100, 3) },
+    { label: 'Simulation draw share', impact: roundTo(regularDrawProbability / 100, 3) },
+    { label: 'Simulation away win share', impact: roundTo(knockoutAwayWinProbability / 100, 3) },
+    { label: 'Top scoreline share', impact: roundTo(topScoreShare, 3) },
+    { label: 'Extra-time branch share', impact: roundTo(summary.extraTimeCount / summary.iterations, 3) },
+    { label: 'Penalties branch share', impact: roundTo(summary.penaltiesCount / summary.iterations, 3) },
+  ]
+  const inputSnapshot: PredictionInputSnapshot[] = [
+    { label: 'Simulation runs', value: String(summary.iterations) },
+    { label: 'Stage rules', value: stage === 'knockout' ? 'knockout with ET and penalties' : 'group stage with draws allowed' },
+    { label: 'Average goals', value: `${roundTo(summary.averageHomeGoals, 2)} vs ${roundTo(summary.averageAwayGoals, 2)}` },
+    { label: 'Regular-time 1/X/2', value: `${regularHomeWinProbability}% / ${regularDrawProbability}% / ${regularAwayWinProbability}%` },
+    {
+      label: 'Knockout advancement',
+      value: stage === 'knockout' ? `${homeTeam.name} ${knockoutHomeWinProbability}% / ${awayTeam.name} ${knockoutAwayWinProbability}%` : 'not applicable',
+    },
+    { label: 'Most likely scoreline', value: `${recommendedHomeGoals}:${recommendedAwayGoals} (${roundTo(topScoreShare * 100, 1)}%)` },
+  ]
+
+  const recommendedPrediction: Prediction = {
+    homeGoals: recommendedHomeGoals,
+    awayGoals: recommendedAwayGoals,
+    confidence,
+    homeWinProbability: stage === 'knockout' ? knockoutHomeWinProbability : regularHomeWinProbability,
+    drawProbability: regularDrawProbability,
+    awayWinProbability: stage === 'knockout' ? knockoutAwayWinProbability : regularAwayWinProbability,
+    homeExpectedGoals: roundTo(summary.averageHomeGoals, 2),
+    awayExpectedGoals: roundTo(summary.averageAwayGoals, 2),
+    modelStrength: clamp(Math.round(basePrediction.modelStrength + topScoreShare * 22), 55, 98),
+    summary:
+      stage === 'knockout'
+        ? `Detailed simulation consensus after ${summary.iterations} runs. Regular time, extra time and penalties were simulated separately, and ${recommendedKnockoutWinner === homeTeam.id ? homeTeam.name : awayTeam.name} advanced most often.`
+        : `Detailed simulation consensus after ${summary.iterations} runs. Group-stage rules were kept to 90 minutes only, so the draw branch remains a valid final outcome.`,
+    factorBreakdown,
+    inputSnapshot,
+    marketSourceKey: summary.marketSourceKey,
+    knockoutWinnerTeamId: recommendedKnockoutWinner,
+    knockoutResolution: recommendedKnockoutResolution,
+    penaltyScore: recommendedKnockoutResolution === 'penalties' ? (recommendedKnockoutWinner === homeTeam.id ? '4-3' : '3-4') : undefined,
+  }
+
+  const heatmapCells = Array.from({ length: 7 }, (_, homeGoalIndex) =>
+    Array.from({ length: 7 }, (_, awayGoalIndex) => {
+      const homeKey = homeGoalIndex === 6 ? '6+' : String(homeGoalIndex)
+      const awayKey = awayGoalIndex === 6 ? '6+' : String(awayGoalIndex)
+      let count = 0
+
+      for (const [scorelineLabel, scorelineCount] of summary.scorelineCounts.entries()) {
+        const [homeGoalsText, awayGoalsText] = scorelineLabel.split('-')
+        const homeGoalsValue = Number(homeGoalsText)
+        const awayGoalsValue = Number(awayGoalsText)
+        const homeBucket = homeGoalsValue >= 6 ? '6+' : String(homeGoalsValue)
+        const awayBucket = awayGoalsValue >= 6 ? '6+' : String(awayGoalsValue)
+
+        if (homeBucket === homeKey && awayBucket === awayKey) {
+          count += scorelineCount
+        }
+      }
+
+      return {
+        homeGoals: homeKey,
+        awayGoals: awayKey,
+        share: roundTo((count / summary.iterations) * 100, 1),
+      }
+    }),
+  ).flat()
+
+  return {
+    stage,
+    iterations: summary.iterations,
+    homeTeamName: homeTeam.name,
+    awayTeamName: awayTeam.name,
+    venue: '',
+    recommendedPrediction,
+    topScorelines: topScoreEntries.map(([label, count]) => ({
+      label: label.replace('-', ':'),
+      count,
+      share: roundTo((count / summary.iterations) * 100, 1),
+    })),
+    summaryMetrics: stage === 'knockout'
+      ? [
+          { label: `${homeTeam.name} advance`, value: `${knockoutHomeWinProbability}%` },
+          { label: `${awayTeam.name} advance`, value: `${knockoutAwayWinProbability}%` },
+          { label: 'Extra time reached', value: `${roundTo((summary.extraTimeCount / summary.iterations) * 100, 1)}%` },
+          { label: 'Penalties reached', value: `${roundTo((summary.penaltiesCount / summary.iterations) * 100, 1)}%` },
+          { label: 'Avg goals', value: `${roundTo(summary.averageHomeGoals, 2)} : ${roundTo(summary.averageAwayGoals, 2)}` },
+        ]
+      : [
+          { label: `${homeTeam.name} win`, value: `${regularHomeWinProbability}%` },
+          { label: 'Draw', value: `${regularDrawProbability}%` },
+          { label: `${awayTeam.name} win`, value: `${regularAwayWinProbability}%` },
+          { label: 'Avg goals', value: `${roundTo(summary.averageHomeGoals, 2)} : ${roundTo(summary.averageAwayGoals, 2)}` },
+          { label: 'Most common score', value: `${recommendedHomeGoals}:${recommendedAwayGoals}` },
+        ],
+    chartBars: stage === 'knockout'
+      ? [
+          { label: `${homeTeam.name} advance`, share: knockoutHomeWinProbability },
+          { label: `${awayTeam.name} advance`, share: knockoutAwayWinProbability },
+          { label: 'ET branch', share: roundTo((summary.extraTimeCount / summary.iterations) * 100, 1) },
+          { label: 'Pens branch', share: roundTo((summary.penaltiesCount / summary.iterations) * 100, 1) },
+        ]
+      : [
+          { label: `${homeTeam.name} win`, share: regularHomeWinProbability },
+          { label: 'Draw', share: regularDrawProbability },
+          { label: `${awayTeam.name} win`, share: regularAwayWinProbability },
+        ],
+    scorelineHeatmap: heatmapCells,
+    phaseFlow:
+      stage === 'knockout'
+        ? [
+            { label: 'Resolved in regular time', share: roundTo(((summary.iterations - summary.extraTimeCount) / summary.iterations) * 100, 1) },
+            { label: 'Reached extra time', share: roundTo((summary.extraTimeCount / summary.iterations) * 100, 1) },
+            { label: 'Reached penalties', share: roundTo((summary.penaltiesCount / summary.iterations) * 100, 1) },
+          ]
+        : [
+            { label: 'Resolved in regular time', share: 100 },
+            { label: 'Reached extra time', share: 0 },
+            { label: 'Reached penalties', share: 0 },
+          ],
+    notes:
+      stage === 'knockout'
+        ? [
+            'Regular time is simulated first. Only tied games branch into extra time and then penalties.',
+            'This workbench stays fully local in the browser, so it does not consume API credits.',
+          ]
+        : [
+            'Group-stage simulation stops at full time. No extra time or penalties are considered here.',
+            'This workbench stays fully local in the browser, so it does not consume API credits.',
+          ],
+  }
+}
+
 function predictMatch(
   homeTeam: Team,
   awayTeam: Team,
@@ -2430,6 +2676,121 @@ function getGroupStateContext(match: Match, matches: Match[]): GroupStateContext
   }
 }
 
+function runDetailedSimulation(
+  stage: 'group' | 'knockout',
+  iterations: number,
+  homeTeam: Team,
+  awayTeam: Team,
+  venueCity: string,
+  context: Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'> | undefined,
+  liveTeamForm: Partial<Record<string, TeamLiveForm>>,
+  teamDirectory: Partial<Record<string, TeamDirectoryEntry>>,
+  marketSignal: MarketConsensusSnapshot | undefined,
+  groupState: GroupStateContext | undefined,
+): DetailedSimulationReport {
+  const basePrediction = predictMatch(
+    homeTeam,
+    awayTeam,
+    venueCity,
+    0,
+    context,
+    liveTeamForm,
+    teamDirectory,
+    {
+      knockout: stage === 'knockout',
+      groupState,
+      marketSignal,
+    },
+  )
+  const scorelineCounts = new Map<string, number>()
+  let totalHomeGoals = 0
+  let totalAwayGoals = 0
+  let regularHomeWins = 0
+  let regularDraws = 0
+  let regularAwayWins = 0
+  let knockoutHomeWins = 0
+  let knockoutAwayWins = 0
+  let extraTimeCount = 0
+  let penaltiesCount = 0
+  const homeEntry = teamDirectory[homeTeam.id]
+  const awayEntry = teamDirectory[awayTeam.id]
+  const penaltyEdge = getSimulationPenaltyEdge(homeTeam, awayTeam, homeEntry, awayEntry)
+  const extraTimeHomeLambda = clamp(
+    basePrediction.homeExpectedGoals * 0.31 + (homeTeam.rating - awayTeam.rating) / 220 + penaltyEdge * 0.16,
+    0.08,
+    1.28,
+  )
+  const extraTimeAwayLambda = clamp(
+    basePrediction.awayExpectedGoals * 0.31 - (homeTeam.rating - awayTeam.rating) / 240 - penaltyEdge * 0.14,
+    0.08,
+    1.28,
+  )
+
+  for (let index = 0; index < iterations; index += 1) {
+    let homeGoals = samplePoissonGoals(basePrediction.homeExpectedGoals)
+    let awayGoals = samplePoissonGoals(basePrediction.awayExpectedGoals)
+    totalHomeGoals += homeGoals
+    totalAwayGoals += awayGoals
+
+    if (homeGoals > awayGoals) {
+      regularHomeWins += 1
+      knockoutHomeWins += 1
+    } else if (homeGoals < awayGoals) {
+      regularAwayWins += 1
+      knockoutAwayWins += 1
+    } else {
+      regularDraws += 1
+
+      if (stage === 'knockout') {
+        extraTimeCount += 1
+        const extraTimeHomeGoals = samplePoissonGoals(extraTimeHomeLambda)
+        const extraTimeAwayGoals = samplePoissonGoals(extraTimeAwayLambda)
+        homeGoals += extraTimeHomeGoals
+        awayGoals += extraTimeAwayGoals
+        totalHomeGoals += extraTimeHomeGoals
+        totalAwayGoals += extraTimeAwayGoals
+
+        if (extraTimeHomeGoals > extraTimeAwayGoals) {
+          knockoutHomeWins += 1
+        } else if (extraTimeAwayGoals > extraTimeHomeGoals) {
+          knockoutAwayWins += 1
+        } else {
+          penaltiesCount += 1
+          const homeWinsPens = Math.random() < clamp(0.5 + penaltyEdge, 0.18, 0.82)
+          if (homeWinsPens) {
+            knockoutHomeWins += 1
+          } else {
+            knockoutAwayWins += 1
+          }
+        }
+      }
+    }
+
+    const scoreKey = `${homeGoals}-${awayGoals}`
+    scorelineCounts.set(scoreKey, (scorelineCounts.get(scoreKey) ?? 0) + 1)
+  }
+
+  const report = buildDetailedSimulationPrediction(basePrediction, stage, homeTeam, awayTeam, {
+    iterations,
+    regularHomeWins,
+    regularDraws,
+    regularAwayWins,
+    knockoutHomeWins,
+    knockoutAwayWins,
+    extraTimeCount,
+    penaltiesCount,
+    scorelineCounts,
+    averageHomeGoals: totalHomeGoals / iterations,
+    averageAwayGoals: totalAwayGoals / iterations,
+    marketSourceKey: marketSignal?.sourceKeys[0],
+  })
+
+  return {
+    ...report,
+    venue: venueCity,
+  }
+}
+
 function rankThirdPlacedTeams(
   standings: Record<string, Standing[]>,
   matches: Match[],
@@ -3001,40 +3362,6 @@ function renderPredictionHistory(history: PredictionHistoryEntry[] | undefined) 
   )
 }
 
-function renderPhaseAwardsSkeleton(phaseTitle: string, phaseNote: string) {
-  return (
-    <section className="phase-awards-box">
-      <div className="phase-awards-header">
-        <div>
-          <p className="eyebrow">Poules-style extras</p>
-          <h3>{phaseTitle}</h3>
-          <p>{phaseNote}</p>
-        </div>
-      </div>
-      <div className="phase-awards-grid">
-        {phaseAwardDefinitions.map((award) => (
-          <article key={award.key} className="phase-award-card">
-            <strong>{award.title}</strong>
-            <p>{award.description}</p>
-            <div className="phase-award-columns">
-              <div className="phase-award-column">
-                <span>From accepted match picks</span>
-                <strong>Skeleton only</strong>
-                <small>This slot will later derive a winner from your accepted results for this phase.</small>
-              </div>
-              <div className="phase-award-column">
-                <span>Dedicated award engine</span>
-                <strong>Planned</strong>
-                <small>This slot is reserved for an independent award-prediction model.</small>
-              </div>
-            </div>
-          </article>
-        ))}
-      </div>
-    </section>
-  )
-}
-
 function formatNullableStat(value?: string | number | null) {
   if (value === undefined || value === null || value === '') {
     return 'No data yet'
@@ -3083,6 +3410,15 @@ function shouldRetryPartialRoster(entry: TeamDirectoryEntry | undefined, liveDat
   return liveDataState.providers.apiFootball.configured || liveDataState.providers.footballData.configured
 }
 
+function scrollToElementById(elementId: string) {
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      const element = document.getElementById(elementId)
+      element?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+  })
+}
+
 function App() {
   const [matches, setMatches] = useState<Match[]>(() => mergeStoredGroupMatches(loadStoredState<Match[]>(storageKeys.groupMatches)))
   const [knockoutMatches, setKnockoutMatches] = useState<KnockoutMatch[]>(() =>
@@ -3095,6 +3431,12 @@ function App() {
     () => loadStoredState<string>('world-cup-betting-system/active-team-id') ?? (groupDefinitions[0]?.teams[0]?.id ?? ''),
   )
   const [simulationFocus, setSimulationFocus] = useState<SimulationFocus | null>(null)
+  const [simulationRunCount, setSimulationRunCount] = useState<number>(10000)
+  const [simulationReport, setSimulationReport] = useState<DetailedSimulationReport | null>(null)
+  const [isRunningSimulation, setIsRunningSimulation] = useState(false)
+  const [phaseAwardPredictions, setPhaseAwardPredictions] = useState<
+    Partial<Record<PhaseKey, Partial<Record<PhaseAwardKey, PhaseAwardSnapshot>>>>
+  >(() => loadStoredState<Partial<Record<PhaseKey, Partial<Record<PhaseAwardKey, PhaseAwardSnapshot>>>>>(storageKeys.phaseAwards) ?? {})
   const [liveTeamForm, setLiveTeamForm] = useState<Partial<Record<string, TeamLiveForm>>>(() =>
     loadStoredState<Partial<Record<string, TeamLiveForm>>>(storageKeys.liveTeamForm) ?? {},
   )
@@ -3184,14 +3526,314 @@ function App() {
   })
   const activeTeam = sortedTeams.find((team) => team.id === activeTeamId) ?? sortedTeams[0] ?? null
   const activeTeamDirectory = activeTeam ? teamDirectory[activeTeam.id] : undefined
-  const knockoutStageConfig: { stage: KnockoutStage; title: string; subtitle: string }[] = [
-    { stage: 'roundOf32', title: 'Round of 32', subtitle: '32 teams enter the bracket here.' },
-    { stage: 'roundOf16', title: 'Round of 16', subtitle: 'Winners from the opening knockout round.' },
-    { stage: 'quarterFinals', title: 'Quarter-finals', subtitle: 'The last eight teams.' },
-    { stage: 'semiFinals', title: 'Semi-finals', subtitle: 'Four teams remain.' },
-    { stage: 'thirdPlace', title: 'Third-place match', subtitle: 'Losers of the semi-finals.' },
-    { stage: 'final', title: 'Final', subtitle: 'The tournament decider.' },
-  ]
+  const knockoutStageConfig = knockoutStageConfigStatic
+
+  function getPhaseOrderIndex(phaseKey: PhaseKey) {
+    return phaseKeyOrder.indexOf(phaseKey)
+  }
+
+  function isPhaseBefore(left: PhaseKey, right: PhaseKey) {
+    return getPhaseOrderIndex(left) < getPhaseOrderIndex(right)
+  }
+
+  function estimateCardsForTeamInMatch(team: Team, opponent: Team, phaseKey: PhaseKey, pressureBoost: number, closenessFactor: number) {
+    const squadSignals = getTeamSquadSignals(team, teamDirectory[team.id])
+    const opponentStrengthFactor = clamp((opponent.rating - team.rating) / 40, -0.35, 0.35)
+    const knockoutBoost = phaseKey === 'group' ? 0 : 0.18
+    return clamp(1.25 + squadSignals.disciplineRisk * 4.2 + pressureBoost + closenessFactor + knockoutBoost + opponentStrengthFactor, 0.7, 4.8)
+  }
+
+  function buildTournamentTrendBeforePhase(phaseKey: PhaseKey) {
+    const trend = new Map<string, { matches: number; wins: number; draws: number; goalsFor: number; goalsAgainst: number; points: number }>()
+    const ensure = (team: Team) => {
+      if (!trend.has(team.id)) {
+        trend.set(team.id, { matches: 0, wins: 0, draws: 0, goalsFor: 0, goalsAgainst: 0, points: 0 })
+      }
+      return trend.get(team.id)!
+    }
+
+    if (isPhaseBefore('group', phaseKey)) {
+      matches
+        .filter((match) => Boolean(match.acceptedPrediction))
+        .forEach((match) => {
+          const result = match.acceptedPrediction!
+          const homeTrend = ensure(match.homeTeam)
+          const awayTrend = ensure(match.awayTeam)
+          homeTrend.matches += 1
+          awayTrend.matches += 1
+          homeTrend.goalsFor += result.homeGoals
+          homeTrend.goalsAgainst += result.awayGoals
+          awayTrend.goalsFor += result.awayGoals
+          awayTrend.goalsAgainst += result.homeGoals
+
+          if (result.homeGoals > result.awayGoals) {
+            homeTrend.wins += 1
+            homeTrend.points += 3
+          } else if (result.homeGoals < result.awayGoals) {
+            awayTrend.wins += 1
+            awayTrend.points += 3
+          } else {
+            homeTrend.draws += 1
+            awayTrend.draws += 1
+            homeTrend.points += 1
+            awayTrend.points += 1
+          }
+        })
+    }
+
+    displayKnockoutMatches.forEach((match) => {
+      if (!match.acceptedPrediction) {
+        return
+      }
+
+      if (!isPhaseBefore(match.stage, phaseKey)) {
+        return
+      }
+
+      const resolvedMatch = resolvedKnockoutMatches.find((item) => item.match.id === match.id)
+
+      if (!resolvedMatch?.homeTeam || !resolvedMatch.awayTeam) {
+        return
+      }
+
+      const result = match.acceptedPrediction
+      const homeTrend = ensure(resolvedMatch.homeTeam)
+      const awayTrend = ensure(resolvedMatch.awayTeam)
+      homeTrend.matches += 1
+      awayTrend.matches += 1
+      homeTrend.goalsFor += result.homeGoals
+      homeTrend.goalsAgainst += result.awayGoals
+      awayTrend.goalsFor += result.awayGoals
+      awayTrend.goalsAgainst += result.homeGoals
+
+      if ((result.knockoutWinnerTeamId ?? (result.homeGoals > result.awayGoals ? resolvedMatch.homeTeam.id : resolvedMatch.awayTeam.id)) === resolvedMatch.homeTeam.id) {
+        homeTrend.wins += 1
+        homeTrend.points += 3
+      } else {
+        awayTrend.wins += 1
+        awayTrend.points += 3
+      }
+    })
+
+    return trend
+  }
+
+  function getPhaseTeamPredictionCandidates(phaseKey: PhaseKey) {
+    if (phaseKey === 'group') {
+      return matches.map((match) => ({
+        matchId: match.id,
+        homeTeam: match.homeTeam,
+        awayTeam: match.awayTeam,
+        venueCity: match.venueCity,
+        context: match as Pick<Match, 'restDaysHome' | 'restDaysAway' | 'travelKmHome' | 'travelKmAway'>,
+        groupState: getGroupStateContext(match, matches),
+        knockout: false,
+      }))
+    }
+
+    return resolvedKnockoutMatches
+      .filter((item) => item.match.stage === phaseKey && item.homeTeam && item.awayTeam)
+      .map((item) => ({
+        matchId: item.match.id,
+        homeTeam: item.homeTeam!,
+        awayTeam: item.awayTeam!,
+        venueCity: item.schedule?.venueCity ?? 'New York/New Jersey',
+        context: item.schedule
+          ? {
+              restDaysHome: item.schedule.restDaysHome,
+              restDaysAway: item.schedule.restDaysAway,
+              travelKmHome: item.schedule.travelKmHome,
+              travelKmAway: item.schedule.travelKmAway,
+            }
+          : undefined,
+        groupState: undefined,
+        knockout: true,
+      }))
+  }
+
+  function buildAcceptedAwardSnapshot(phaseKey: PhaseKey, awardKey: PhaseAwardKey) {
+    const teamValues = new Map<string, { team: Team; value: number }>()
+    const trendBeforePhase = buildTournamentTrendBeforePhase(phaseKey)
+    const applyValue = (team: Team, value: number) => {
+      const current = teamValues.get(team.id)
+      if (current) {
+        current.value += value
+        return
+      }
+
+      teamValues.set(team.id, { team, value })
+    }
+
+    const applyMatch = (homeTeam: Team, awayTeam: Team, homeGoals: number, awayGoals: number) => {
+      const homeTrend = trendBeforePhase.get(homeTeam.id)
+      const awayTrend = trendBeforePhase.get(awayTeam.id)
+      const homePressure = clamp(0.18 - (homeTrend?.points ?? 0) / Math.max(1, (homeTrend?.matches ?? 0) * 4), -0.05, 0.24)
+      const awayPressure = clamp(0.18 - (awayTrend?.points ?? 0) / Math.max(1, (awayTrend?.matches ?? 0) * 4), -0.05, 0.24)
+      const closeness = clamp(0.26 - Math.abs(homeGoals - awayGoals) * 0.06, 0.04, 0.26)
+      const homeCards = estimateCardsForTeamInMatch(homeTeam, awayTeam, phaseKey, homePressure, closeness)
+      const awayCards = estimateCardsForTeamInMatch(awayTeam, homeTeam, phaseKey, awayPressure, closeness)
+
+      switch (awardKey) {
+        case 'goalMachine':
+          applyValue(homeTeam, homeGoals)
+          applyValue(awayTeam, awayGoals)
+          break
+        case 'disastrousDefence':
+          applyValue(homeTeam, awayGoals)
+          applyValue(awayTeam, homeGoals)
+          break
+        case 'cardKings':
+          applyValue(homeTeam, homeCards)
+          applyValue(awayTeam, awayCards)
+          break
+        case 'nobleEleven':
+          applyValue(homeTeam, homeCards)
+          applyValue(awayTeam, awayCards)
+          break
+      }
+    }
+
+    if (phaseKey === 'group') {
+      matches.filter((match) => match.acceptedPrediction).forEach((match) => {
+        applyMatch(match.homeTeam, match.awayTeam, match.acceptedPrediction!.homeGoals, match.acceptedPrediction!.awayGoals)
+      })
+    } else {
+      resolvedKnockoutMatches
+        .filter((item) => item.match.stage === phaseKey && item.match.acceptedPrediction && item.homeTeam && item.awayTeam)
+        .forEach((item) => {
+          applyMatch(item.homeTeam!, item.awayTeam!, item.match.acceptedPrediction!.homeGoals, item.match.acceptedPrediction!.awayGoals)
+        })
+    }
+
+    const entries = [...teamValues.values()]
+    if (entries.length === 0) {
+      return null
+    }
+
+    const sorted = [...entries].sort((left, right) =>
+      awardKey === 'nobleEleven'
+        ? left.value - right.value || right.team.rating - left.team.rating
+        : right.value - left.value || right.team.rating - left.team.rating,
+    )
+    const winner = sorted[0]
+    const runnerUp = sorted[1]
+    const valueGap = Math.abs((winner?.value ?? 0) - (runnerUp?.value ?? 0))
+
+    return {
+      teamId: winner.team.id,
+      teamName: winner.team.name,
+      value: roundTo(winner.value, 2),
+      confidence: clamp(Math.round(58 + valueGap * 12), 52, 93),
+      summary:
+        awardKey === 'nobleEleven'
+          ? `${winner.team.name} currently projects as the cleanest team in this phase from accepted picks.`
+          : `${winner.team.name} currently leads this phase when we derive the category from your accepted match picks.`,
+    } satisfies PhaseAwardSnapshot
+  }
+
+  function buildEngineAwardSnapshot(phaseKey: PhaseKey, awardKey: PhaseAwardKey) {
+    const phaseMatches = getPhaseTeamPredictionCandidates(phaseKey)
+
+    if (phaseMatches.length === 0) {
+      return null
+    }
+
+    const trendBeforePhase = buildTournamentTrendBeforePhase(phaseKey)
+    const teamValues = new Map<string, { team: Team; value: number }>()
+    const applyValue = (team: Team, value: number) => {
+      const current = teamValues.get(team.id)
+      if (current) {
+        current.value += value
+        return
+      }
+
+      teamValues.set(team.id, { team, value })
+    }
+
+    phaseMatches.forEach((phaseMatch, index) => {
+      const prediction = predictMatch(
+        phaseMatch.homeTeam,
+        phaseMatch.awayTeam,
+        phaseMatch.venueCity,
+        index + 1,
+        phaseMatch.context,
+        liveTeamForm,
+        teamDirectory,
+        {
+          knockout: phaseMatch.knockout,
+          groupState: phaseMatch.groupState,
+          marketSignal: marketApiState.consensusByMatchId[phaseMatch.matchId],
+        },
+      )
+      const homeTrend = trendBeforePhase.get(phaseMatch.homeTeam.id)
+      const awayTrend = trendBeforePhase.get(phaseMatch.awayTeam.id)
+      const homeMomentum = clamp(
+        ((homeTrend?.goalsFor ?? 0) - (homeTrend?.goalsAgainst ?? 0)) / Math.max(1, homeTrend?.matches ?? 1) * 0.1 +
+          (homeTrend?.points ?? 0) / Math.max(1, homeTrend?.matches ?? 1) * 0.05,
+        -0.2,
+        0.34,
+      )
+      const awayMomentum = clamp(
+        ((awayTrend?.goalsFor ?? 0) - (awayTrend?.goalsAgainst ?? 0)) / Math.max(1, awayTrend?.matches ?? 1) * 0.1 +
+          (awayTrend?.points ?? 0) / Math.max(1, awayTrend?.matches ?? 1) * 0.05,
+        -0.2,
+        0.34,
+      )
+      const homeGoalsProjection = clamp(prediction.homeExpectedGoals + homeMomentum * 0.9 - awayMomentum * 0.25, 0.1, 5.2)
+      const awayGoalsProjection = clamp(prediction.awayExpectedGoals + awayMomentum * 0.9 - homeMomentum * 0.25, 0.1, 5.2)
+      const closeness = clamp(0.28 - Math.abs(homeGoalsProjection - awayGoalsProjection) * 0.06, 0.05, 0.28)
+      const homeCards = estimateCardsForTeamInMatch(phaseMatch.homeTeam, phaseMatch.awayTeam, phaseKey, clamp(0.14 - homeMomentum * 0.4, -0.04, 0.22), closeness)
+      const awayCards = estimateCardsForTeamInMatch(phaseMatch.awayTeam, phaseMatch.homeTeam, phaseKey, clamp(0.14 - awayMomentum * 0.4, -0.04, 0.22), closeness)
+
+      switch (awardKey) {
+        case 'goalMachine':
+          applyValue(phaseMatch.homeTeam, homeGoalsProjection)
+          applyValue(phaseMatch.awayTeam, awayGoalsProjection)
+          break
+        case 'disastrousDefence':
+          applyValue(phaseMatch.homeTeam, awayGoalsProjection)
+          applyValue(phaseMatch.awayTeam, homeGoalsProjection)
+          break
+        case 'cardKings':
+          applyValue(phaseMatch.homeTeam, homeCards)
+          applyValue(phaseMatch.awayTeam, awayCards)
+          break
+        case 'nobleEleven':
+          applyValue(phaseMatch.homeTeam, homeCards)
+          applyValue(phaseMatch.awayTeam, awayCards)
+          break
+      }
+    })
+
+    const entries = [...teamValues.values()]
+    if (entries.length === 0) {
+      return null
+    }
+
+    const sorted = [...entries].sort((left, right) =>
+      awardKey === 'nobleEleven'
+        ? left.value - right.value || right.team.rating - left.team.rating
+        : right.value - left.value || right.team.rating - left.team.rating,
+    )
+    const winner = sorted[0]
+    const runnerUp = sorted[1]
+    const valueGap = Math.abs((winner?.value ?? 0) - (runnerUp?.value ?? 0))
+
+    return {
+      teamId: winner.team.id,
+      teamName: winner.team.name,
+      value: roundTo(winner.value, 2),
+      confidence: clamp(Math.round(56 + valueGap * 14), 50, 94),
+      summary:
+        awardKey === 'goalMachine'
+          ? `${winner.team.name} gets the edge because the phase engine likes its scoring output and its earlier tournament momentum.`
+          : awardKey === 'disastrousDefence'
+            ? `${winner.team.name} projects as the leakiest side in this phase once prior tournament performance is blended in.`
+            : awardKey === 'cardKings'
+              ? `${winner.team.name} projects as the most card-prone side in this phase after discipline profile and early-tournament pressure adjustments.`
+              : `${winner.team.name} projects as the calmest side in this phase after discipline profile and earlier tournament form are blended together.`,
+    } satisfies PhaseAwardSnapshot
+  }
 
   useEffect(() => {
     window.localStorage.setItem(storageKeys.groupMatches, JSON.stringify(matches))
@@ -3224,6 +3866,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(storageKeys.teamDirectory, JSON.stringify(teamDirectory))
   }, [teamDirectory])
+
+  useEffect(() => {
+    window.localStorage.setItem(storageKeys.phaseAwards, JSON.stringify(phaseAwardPredictions))
+  }, [phaseAwardPredictions])
 
   useEffect(() => {
     void fetchMarketStateFromBackend()
@@ -3348,6 +3994,7 @@ function App() {
   }
 
   function handleOpenSimulationFromGroupMatch(match: Match) {
+    setSimulationReport(null)
     setSimulationFocus({
       stage: 'group',
       matchId: match.id,
@@ -3360,6 +4007,7 @@ function App() {
   }
 
   function handleOpenSimulationFromKnockoutMatch(match: KnockoutMatch, resolvedMatch: ResolvedKnockoutMatch) {
+    setSimulationReport(null)
     setSimulationFocus({
       stage: 'knockout',
       matchId: match.id,
@@ -3369,6 +4017,233 @@ function App() {
       venue: resolvedMatch.schedule?.venueCity ?? 'TBC',
     })
     setActiveView('simulation')
+  }
+
+  async function handleRunDetailedSimulation() {
+    if (!simulationFocus) {
+      return
+    }
+
+    setIsRunningSimulation(true)
+
+    try {
+      if (simulationFocus.stage === 'group') {
+        const match = matches.find((candidate) => candidate.id === simulationFocus.matchId)
+
+        if (!match) {
+          return
+        }
+
+        const report = runDetailedSimulation(
+          'group',
+          simulationRunCount,
+          match.homeTeam,
+          match.awayTeam,
+          match.venueCity,
+          match,
+          liveTeamForm,
+          teamDirectory,
+          marketApiState.consensusByMatchId[match.id],
+          getGroupStateContext(match, matches),
+        )
+
+        setSimulationReport(report)
+        return
+      }
+
+      const resolvedMatch = resolvedKnockoutMatches.find((candidate) => candidate.match.id === simulationFocus.matchId)
+
+      if (!resolvedMatch?.homeTeam || !resolvedMatch.awayTeam) {
+        return
+      }
+
+      const report = runDetailedSimulation(
+        'knockout',
+        simulationRunCount,
+        resolvedMatch.homeTeam,
+        resolvedMatch.awayTeam,
+        resolvedMatch.schedule?.venueCity ?? simulationFocus.venue,
+        resolvedMatch.schedule
+          ? {
+              restDaysHome: resolvedMatch.schedule.restDaysHome,
+              restDaysAway: resolvedMatch.schedule.restDaysAway,
+              travelKmHome: resolvedMatch.schedule.travelKmHome,
+              travelKmAway: resolvedMatch.schedule.travelKmAway,
+            }
+          : undefined,
+        liveTeamForm,
+        teamDirectory,
+        marketApiState.consensusByMatchId[resolvedMatch.match.id],
+        undefined,
+      )
+
+      setSimulationReport(report)
+    } finally {
+      setIsRunningSimulation(false)
+    }
+  }
+
+  function handleImportSimulationResult(mode: 'prediction' | 'accepted') {
+    if (!simulationFocus || !simulationReport) {
+      return
+    }
+
+    if (simulationFocus.stage === 'group') {
+      const targetMatch = matches.find((match) => match.id === simulationFocus.matchId)
+
+      setMatches((currentMatches) =>
+        currentMatches.map((match) =>
+          match.id === simulationFocus.matchId
+            ? {
+                ...match,
+                manualEditorOpen: false,
+                prediction: simulationReport.recommendedPrediction,
+                acceptedPrediction: mode === 'accepted' ? simulationReport.recommendedPrediction : match.acceptedPrediction,
+                predictionHistory: appendHistory(match.predictionHistory, {
+                  action: mode === 'accepted' ? 'accepted' : 'manual',
+                  stage: 'group',
+                  source: 'system',
+                  summary:
+                    mode === 'accepted'
+                      ? 'Detailed simulation result imported and accepted.'
+                      : 'Detailed simulation result imported as the active prediction.',
+                  prediction: simulationReport.recommendedPrediction,
+                }),
+              }
+            : match,
+        ),
+      )
+
+      if (mode === 'accepted') {
+        setActiveView('group')
+
+        if (targetMatch) {
+          scrollToElementById(`group-match-${targetMatch.id}`)
+        }
+      }
+
+      return
+    }
+
+    const resolvedMatch = resolvedKnockoutMatches.find((candidate) => candidate.match.id === simulationFocus.matchId)
+
+    setKnockoutMatches((currentMatches) =>
+      currentMatches.map((match) =>
+        match.id === simulationFocus.matchId
+          ? {
+              ...match,
+              manualEditorOpen: false,
+              lastResolvedHomeTeamId: resolvedMatch?.homeTeam?.id,
+              lastResolvedAwayTeamId: resolvedMatch?.awayTeam?.id,
+              prediction: simulationReport.recommendedPrediction,
+              acceptedPrediction: mode === 'accepted' ? simulationReport.recommendedPrediction : match.acceptedPrediction,
+              predictionHistory: appendHistory(match.predictionHistory, {
+                action: mode === 'accepted' ? 'accepted' : 'manual',
+                stage: 'knockout',
+                source: 'system',
+                summary:
+                  mode === 'accepted'
+                    ? 'Detailed simulation result imported and accepted.'
+                    : 'Detailed simulation result imported as the active prediction.',
+                prediction: simulationReport.recommendedPrediction,
+              }),
+            }
+            : match,
+        ),
+      )
+
+    if (mode === 'accepted') {
+      setActiveView('bracket')
+      scrollToElementById(`knockout-match-${simulationFocus.matchId}`)
+    }
+  }
+
+  function handleTryToPredictPhaseAward(phaseKey: PhaseKey, awardKey: PhaseAwardKey) {
+    const snapshot = buildEngineAwardSnapshot(phaseKey, awardKey)
+
+    if (!snapshot) {
+      return
+    }
+
+    setPhaseAwardPredictions((currentValue) => ({
+      ...currentValue,
+      [phaseKey]: {
+        ...(currentValue[phaseKey] ?? {}),
+        [awardKey]: snapshot,
+      },
+    }))
+  }
+
+  function renderPhaseAwards(phaseKey: PhaseKey, phaseTitle: string, phaseNote: string) {
+    return (
+      <section className="phase-awards-box">
+        <div className="phase-awards-header">
+          <div>
+            <p className="eyebrow">Poules-style extras</p>
+            <h3>{phaseTitle}</h3>
+            <p>{phaseNote}</p>
+          </div>
+        </div>
+        <div className="phase-awards-grid">
+          {phaseAwardDefinitions.map((award) => {
+            const acceptedSnapshot = buildAcceptedAwardSnapshot(phaseKey, award.key)
+            const engineSnapshot = phaseAwardPredictions[phaseKey]?.[award.key]
+
+            return (
+              <article key={award.key} className="phase-award-card">
+                <strong>{award.title}</strong>
+                <p>{award.description}</p>
+                <div className="phase-award-columns">
+                  <div className="phase-award-column">
+                    <span>From accepted match picks</span>
+                    {acceptedSnapshot ? (
+                      <>
+                        <strong>{acceptedSnapshot.teamName}</strong>
+                        <small>
+                          {acceptedSnapshot.value} projected value · {acceptedSnapshot.confidence}% confidence
+                        </small>
+                        <small>{acceptedSnapshot.summary}</small>
+                      </>
+                    ) : (
+                      <>
+                        <strong>Waiting for accepted picks</strong>
+                        <small>Accept more matches in this phase to derive a live leader from your current tournament path.</small>
+                      </>
+                    )}
+                  </div>
+                  <div className="phase-award-column">
+                    <span>Dedicated award engine</span>
+                    {engineSnapshot ? (
+                      <>
+                        <strong>{engineSnapshot.teamName}</strong>
+                        <small>
+                          {engineSnapshot.value} projected value · {engineSnapshot.confidence}% confidence
+                        </small>
+                        <small>{engineSnapshot.summary}</small>
+                      </>
+                    ) : (
+                      <>
+                        <strong>Not predicted yet</strong>
+                        <small>
+                          This phase award predictor will also look at how teams performed in earlier tournament rounds.
+                        </small>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      className="secondary-button compact-button phase-award-button"
+                      onClick={() => handleTryToPredictPhaseAward(phaseKey, award.key)}
+                    >
+                      {engineSnapshot ? 'Predict again' : 'Try to predict'}
+                    </button>
+                  </div>
+                </div>
+              </article>
+            )
+          })}
+        </div>
+      </section>
+    )
   }
 
   async function handleRefreshBets() {
@@ -3424,11 +4299,7 @@ function App() {
 
   function handleScrollToGroup(groupName: string) {
     setActiveView('group')
-
-    window.requestAnimationFrame(() => {
-      const target = document.getElementById(`group-section-${groupName}`)
-      target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
+    scrollToElementById(`group-section-${groupName}`)
   }
 
   function handleOpenSourcePicker(slotKey: BrokerSlotKey) {
@@ -3698,6 +4569,7 @@ function App() {
     setMatches(createInitialMatches())
     setKnockoutMatches(createInitialKnockoutMatches())
     setStandingsMode('prediction')
+    setPhaseAwardPredictions({})
   }
 
   function handleResetMatch(matchId: string) {
@@ -4101,6 +4973,7 @@ function App() {
     window.localStorage.removeItem(storageKeys.standingsMode)
     window.localStorage.removeItem(storageKeys.liveTeamForm)
     window.localStorage.removeItem(storageKeys.teamDirectory)
+    window.localStorage.removeItem(storageKeys.phaseAwards)
     window.localStorage.removeItem('world-cup-betting-system/team-sort-mode')
     window.localStorage.removeItem('world-cup-betting-system/active-team-id')
     setMatches(createInitialMatches())
@@ -4109,6 +4982,7 @@ function App() {
     setStandingsMode('prediction')
     setTeamSortMode('group')
     setActiveTeamId(groupDefinitions[0]?.teams[0]?.id ?? '')
+    setPhaseAwardPredictions({})
     setLiveTeamForm({})
     setTeamDirectory({})
     setLiveDataState(defaultLiveDataState)
@@ -4619,7 +5493,8 @@ function App() {
               <span className="badge">paired by round</span>
             </div>
 
-            {renderPhaseAwardsSkeleton(
+            {renderPhaseAwards(
+              'group',
               'Group Phase side awards',
               'This is a lightweight placeholder for Poules-style side bets in the group stage. The two award columns are intentionally reserved for future logic.',
             )}
@@ -4670,7 +5545,7 @@ function App() {
                     {matches
                       .filter((match) => match.group === groupDefinition.name)
                       .map((match) => (
-                        <article key={match.id} className="match-card">
+                        <article key={match.id} id={`group-match-${match.id}`} className="match-card">
                           <div className="match-meta">
                             <span>{match.kickoffLabel}</span>
                             <span>Group {match.group} / Match {match.round}</span>
@@ -4902,7 +5777,8 @@ function App() {
                 </div>
               </div>
 
-              {renderPhaseAwardsSkeleton(
+              {renderPhaseAwards(
+                stage,
                 `${title} side awards`,
                 'Skeleton placeholder for phase-level side bets. Later this area can compare a table derived from your accepted picks with an independent award-prediction engine.',
               )}
@@ -4916,7 +5792,7 @@ function App() {
                     const scoreLabel = formatPredictionScore(match.acceptedPrediction ?? match.prediction) || '? : ?'
 
                     return (
-                      <article key={match.id} className="match-card">
+                      <article key={match.id} id={`knockout-match-${match.id}`} className="match-card">
                         <div className="match-meta">
                           <span>{resolvedMatch.schedule ? `${resolvedMatch.schedule.localDateLabel} / ${resolvedMatch.schedule.localTimeLabel}` : 'TBC'}</span>
                           <span>{title} / {match.id}</span>
@@ -5114,11 +5990,11 @@ function App() {
               <p className="eyebrow">Detailed simulation</p>
               <h2>Monte Carlo workbench</h2>
               <p>
-                This is a planned workspace for much deeper match simulation, bigger probability trees, distribution charts
-                and import-back controls for Group Phase and Bracket Phase.
+                This workspace runs high-volume local simulations for the selected match and can import the consensus result
+                back into Group Phase or Bracket Phase.
               </p>
             </div>
-            <span className="badge">Skeleton only</span>
+            <span className="badge">{simulationFocus?.stage === 'knockout' ? 'Knockout rules active' : 'Group rules active'}</span>
           </div>
 
           <div className="simulation-layout">
@@ -5129,6 +6005,14 @@ function App() {
                   <h3>{simulationFocus.homeTeamName} vs {simulationFocus.awayTeamName}</h3>
                   <p>{simulationFocus.label}</p>
                   <p>Venue: {simulationFocus.venue}</p>
+                  <p>
+                    Rules:{' '}
+                    <strong>
+                      {simulationFocus.stage === 'group'
+                        ? 'Group match, so the simulation ends after 90 minutes and draws remain valid.'
+                        : 'Knockout match, so tied games branch into extra time and then penalties.'}
+                    </strong>
+                  </p>
                 </>
               ) : (
                 <>
@@ -5139,33 +6023,185 @@ function App() {
             </article>
 
             <article className="simulation-focus-card">
-              <span className="eyebrow">Planned run mode</span>
+              <span className="eyebrow">Run controls</span>
               <h3>High-volume stochastic model</h3>
+              <div className="simulation-controls">
+                <label className="simulation-control-field">
+                  <span>Simulation runs</span>
+                  <select value={simulationRunCount} onChange={(event) => setSimulationRunCount(Number(event.target.value))}>
+                    <option value={1000}>1,000</option>
+                    <option value={5000}>5,000</option>
+                    <option value={10000}>10,000</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="primary-button"
+                  onClick={() => void handleRunDetailedSimulation()}
+                  disabled={!simulationFocus || isRunningSimulation}
+                >
+                  {isRunningSimulation ? 'Running simulation...' : 'Run simulation'}
+                </button>
+              </div>
               <p>
-                Reserved for future `10,000+` simulation runs, score distributions, extra-time branches, penalty paths,
-                bookmaker overlays and import-back actions.
+                The run happens fully in your browser. It does not use API credits and respects the selected match type.
               </p>
             </article>
           </div>
 
-          <div className="simulation-grid">
-            <article className="simulation-card">
-              <h3>Outcome distributions</h3>
-              <p>Planned charts: scoreline heatmap, win/draw/win density, extra-time probability and penalties probability.</p>
-            </article>
-            <article className="simulation-card">
-              <h3>Driver analysis</h3>
-              <p>Planned charts: factor importance, roster-impact sensitivity, travel/rest scenarios and market-vs-model divergence.</p>
-            </article>
-            <article className="simulation-card">
-              <h3>Import workflow</h3>
-              <p>Planned action: accept a simulation result and send it back as the new answer in Group Phase or Bracket Phase.</p>
-            </article>
-            <article className="simulation-card">
-              <h3>Data depth</h3>
-              <p>Planned inputs: expanded player states, lineup assumptions, substitutions, tactical branches and scenario presets.</p>
-            </article>
-          </div>
+          {simulationReport ? (
+            <>
+              <div className="simulation-grid">
+                {simulationReport.summaryMetrics.map((metric) => (
+                  <article key={metric.label} className="simulation-card">
+                    <span className="eyebrow">{metric.label}</span>
+                    <h3>{metric.value}</h3>
+                  </article>
+                ))}
+              </div>
+
+              <div className="simulation-grid simulation-grid-two-wide">
+                <article className="simulation-card">
+                  <h3>Recommended import result</h3>
+                  <p>
+                    <strong>{formatPredictionScore(simulationReport.recommendedPrediction)}</strong>
+                  </p>
+                  <p>{simulationReport.recommendedPrediction.summary}</p>
+                  <div className="prediction-metrics">
+                    <span className="metric-pill">{simulationReport.homeTeamName} {simulationReport.recommendedPrediction.homeWinProbability}%</span>
+                    <span className="metric-pill">Draw {simulationReport.recommendedPrediction.drawProbability}%</span>
+                    <span className="metric-pill">{simulationReport.awayTeamName} {simulationReport.recommendedPrediction.awayWinProbability}%</span>
+                    <span className="metric-pill">xG {simulationReport.recommendedPrediction.homeExpectedGoals} - {simulationReport.recommendedPrediction.awayExpectedGoals}</span>
+                  </div>
+                  <div className="action-row">
+                    <button type="button" className="secondary-button" onClick={() => handleImportSimulationResult('prediction')}>
+                      Import as prediction
+                    </button>
+                    <button type="button" className="primary-button" onClick={() => handleImportSimulationResult('accepted')}>
+                      Import and accept
+                    </button>
+                  </div>
+                </article>
+
+                <article className="simulation-card">
+                  <h3>Outcome distribution</h3>
+                  <div className="simulation-bar-list">
+                    {simulationReport.chartBars.map((bar) => (
+                      <div key={bar.label} className="simulation-bar-row">
+                        <div className="simulation-bar-label-row">
+                          <span>{bar.label}</span>
+                          <strong>{bar.share}%</strong>
+                        </div>
+                        <div className="simulation-bar-track">
+                          <span className="simulation-bar-fill" style={{ width: `${clamp(bar.share, 0, 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="simulation-card">
+                  <h3>Phase flow</h3>
+                  <div className="simulation-bar-list">
+                    {simulationReport.phaseFlow.map((bar) => (
+                      <div key={bar.label} className="simulation-bar-row">
+                        <div className="simulation-bar-label-row">
+                          <span>{bar.label}</span>
+                          <strong>{bar.share}%</strong>
+                        </div>
+                        <div className="simulation-bar-track">
+                          <span className="simulation-bar-fill simulation-bar-fill-alt" style={{ width: `${clamp(bar.share, 0, 100)}%` }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="simulation-card">
+                  <h3>Scoreline heatmap</h3>
+                  <div className="simulation-heatmap-wrap">
+                    <div className="simulation-heatmap-labels simulation-heatmap-labels-top">
+                      <span />
+                      {['0', '1', '2', '3', '4', '5', '6+'].map((label) => (
+                        <span key={label}>{label}</span>
+                      ))}
+                    </div>
+                    <div className="simulation-heatmap-grid">
+                      {['0', '1', '2', '3', '4', '5', '6+'].map((homeLabel) => (
+                        <div key={homeLabel} className="simulation-heatmap-row">
+                          <span className="simulation-heatmap-axis">{homeLabel}</span>
+                          {['0', '1', '2', '3', '4', '5', '6+'].map((awayLabel) => {
+                            const cell = simulationReport.scorelineHeatmap.find(
+                              (candidate) => candidate.homeGoals === homeLabel && candidate.awayGoals === awayLabel,
+                            )
+                            const share = cell?.share ?? 0
+                            return (
+                              <span
+                                key={`${homeLabel}-${awayLabel}`}
+                                className="simulation-heatmap-cell"
+                                style={{
+                                  backgroundColor: `rgba(15, 118, 110, ${Math.max(0.08, share / 18)})`,
+                                  color: share >= 7 ? '#f8fafc' : '#082c36',
+                                }}
+                                title={`${homeLabel}:${awayLabel} in ${share}% of runs`}
+                              >
+                                {share > 0 ? `${share}%` : '0'}
+                              </span>
+                            )
+                          })}
+                        </div>
+                      ))}
+                    </div>
+                    <p className="simulation-heatmap-caption">
+                      Rows are {simulationReport.homeTeamName} goals, columns are {simulationReport.awayTeamName} goals.
+                    </p>
+                  </div>
+                </article>
+
+                <article className="simulation-card">
+                  <h3>Most frequent scorelines</h3>
+                  <div className="simulation-scoreline-list">
+                    {simulationReport.topScorelines.map((scoreline) => (
+                      <div key={scoreline.label} className="simulation-scoreline-item">
+                        <strong>{scoreline.label}</strong>
+                        <span>{scoreline.share}%</span>
+                        <small>{scoreline.count} runs</small>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+
+                <article className="simulation-card">
+                  <h3>Simulation notes</h3>
+                  <div className="refresh-feedback-list">
+                    {simulationReport.notes.map((note) => (
+                      <span key={note}>{note}</span>
+                    ))}
+                  </div>
+                  {renderPredictionExplanation(simulationReport.recommendedPrediction)}
+                </article>
+              </div>
+            </>
+          ) : (
+            <div className="simulation-grid">
+              <article className="simulation-card">
+                <h3>Outcome distributions</h3>
+                <p>Run the simulation to see win/draw/win shares, top scorelines and, in knockout mode only, extra-time and penalties branches.</p>
+              </article>
+              <article className="simulation-card">
+                <h3>Driver analysis</h3>
+                <p>The imported recommendation will reuse the enriched model inputs: ratings, form, roster context, continuity and market signal.</p>
+              </article>
+              <article className="simulation-card">
+                <h3>Import workflow</h3>
+                <p>After the run, you will be able to import the simulation consensus either as the active prediction or directly as an accepted result.</p>
+              </article>
+              <article className="simulation-card">
+                <h3>Rules safety</h3>
+                <p>Group matches keep draw outcomes. Knockout matches only branch into extra time and penalties after a 90-minute draw.</p>
+              </article>
+            </div>
+          )}
         </section>
       ) : (
         <section className="panel">
