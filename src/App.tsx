@@ -2181,15 +2181,27 @@ function buildDetailedSimulationPrediction(
     stage === 'knockout'
       ? clamp(Math.round(Math.max(knockoutHomeWinProbability, knockoutAwayWinProbability) + topScoreShare * 100 * 0.55), 45, 97)
       : clamp(Math.round(Math.max(regularHomeWinProbability, regularDrawProbability, regularAwayWinProbability) + topScoreShare * 100 * 0.55), 45, 95)
-  const factorBreakdown: PredictionFactor[] = [
-    { label: 'Simulation home win share', impact: roundTo(knockoutHomeWinProbability / 100, 3) },
+  const simulationFactors: PredictionFactor[] = [
+    { label: 'Simulation home win share', impact: roundTo((stage === 'knockout' ? knockoutHomeWinProbability : regularHomeWinProbability) / 100, 3) },
     { label: 'Simulation draw share', impact: roundTo(regularDrawProbability / 100, 3) },
-    { label: 'Simulation away win share', impact: roundTo(knockoutAwayWinProbability / 100, 3) },
+    { label: 'Simulation away win share', impact: roundTo((stage === 'knockout' ? knockoutAwayWinProbability : regularAwayWinProbability) / 100, 3) },
     { label: 'Top scoreline share', impact: roundTo(topScoreShare, 3) },
     { label: 'Extra-time branch share', impact: roundTo(summary.extraTimeCount / summary.iterations, 3) },
     { label: 'Penalties branch share', impact: roundTo(summary.penaltiesCount / summary.iterations, 3) },
   ]
-  const inputSnapshot: PredictionInputSnapshot[] = [
+  const factorBreakdown: PredictionFactor[] = [
+    ...simulationFactors,
+    ...basePrediction.factorBreakdown.filter(
+      (factor) =>
+        !simulationFactors.some((simulationFactor) => simulationFactor.label === factor.label),
+    ),
+  ]
+    .sort((left, right) => Math.abs(right.impact) - Math.abs(left.impact))
+    .map((factor) => ({
+      label: factor.label,
+      impact: roundTo(factor.impact, 3),
+    }))
+  const simulationInputs: PredictionInputSnapshot[] = [
     { label: 'Simulation runs', value: String(summary.iterations) },
     { label: 'Stage rules', value: stage === 'knockout' ? 'knockout with ET and penalties' : 'group stage with draws allowed' },
     { label: 'Average goals', value: `${roundTo(summary.averageHomeGoals, 2)} vs ${roundTo(summary.averageAwayGoals, 2)}` },
@@ -2200,6 +2212,20 @@ function buildDetailedSimulationPrediction(
     },
     { label: 'Most likely scoreline', value: `${recommendedHomeGoals}:${recommendedAwayGoals} (${roundTo(topScoreShare * 100, 1)}%)` },
   ]
+  const inputSnapshot: PredictionInputSnapshot[] = [
+    ...simulationInputs,
+    ...basePrediction.inputSnapshot.filter(
+      (item) =>
+        !simulationInputs.some((simulationInput) => simulationInput.label === item.label),
+    ),
+  ]
+  const simulationSummary =
+    stage === 'knockout'
+      ? `Detailed simulation consensus after ${summary.iterations} runs. ${homeTeam.name} advanced in ${knockoutHomeWinProbability}% of runs and ${awayTeam.name} in ${knockoutAwayWinProbability}%. Extra time appeared in ${roundTo((summary.extraTimeCount / summary.iterations) * 100, 1)}% of runs and penalties in ${roundTo((summary.penaltiesCount / summary.iterations) * 100, 1)}%.`
+      : `Detailed simulation consensus after ${summary.iterations} runs. ${homeTeam.name} won ${regularHomeWinProbability}% of runs, the draw branch landed at ${regularDrawProbability}% and ${awayTeam.name} won ${regularAwayWinProbability}%. Group-stage rules stayed at 90 minutes only, so the draw branch remains a valid final outcome.`
+  const inheritedContextSummary = basePrediction.summary
+    .replace(/^\d+% confidence\.\s*/i, '')
+    .replace(/^Detailed simulation consensus.*?\.\s*/i, '')
 
   const recommendedPrediction: Prediction = {
     homeGoals: recommendedHomeGoals,
@@ -2211,10 +2237,7 @@ function buildDetailedSimulationPrediction(
     homeExpectedGoals: roundTo(summary.averageHomeGoals, 2),
     awayExpectedGoals: roundTo(summary.averageAwayGoals, 2),
     modelStrength: clamp(Math.round(basePrediction.modelStrength + topScoreShare * 22), 55, 98),
-    summary:
-      stage === 'knockout'
-        ? `Detailed simulation consensus after ${summary.iterations} runs. Regular time, extra time and penalties were simulated separately, and ${recommendedKnockoutWinner === homeTeam.id ? homeTeam.name : awayTeam.name} advanced most often.`
-        : `Detailed simulation consensus after ${summary.iterations} runs. Group-stage rules were kept to 90 minutes only, so the draw branch remains a valid final outcome.`,
+    summary: `${simulationSummary} Base model context still applies: ${inheritedContextSummary}`,
     factorBreakdown,
     inputSnapshot,
     marketSourceKey: summary.marketSourceKey,
