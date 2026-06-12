@@ -1413,13 +1413,17 @@ function mergeRosterEntries(baseEntry, fifaEntry) {
   }
 }
 
-async function refreshLiveTeamData(teams, currentLiveState) {
+async function refreshLiveTeamData(teams, currentLiveState, mode = 'all') {
+  const shouldRefreshForm = mode === 'all' || mode === 'form'
+  const shouldRefreshTeams = mode === 'all' || mode === 'teams'
   let footballDataTeams = null
   let fifaBrowser = null
   const providerMessages = []
 
   try {
-    footballDataTeams = await fetchFootballDataWorldCupTeams()
+    if (shouldRefreshTeams) {
+      footballDataTeams = await fetchFootballDataWorldCupTeams()
+    }
 
     if (footballDataTeams) {
       providerMessages.push(`football-data.org returned ${footballDataTeams.length} World Cup team entries.`)
@@ -1444,25 +1448,29 @@ async function refreshLiveTeamData(teams, currentLiveState) {
 
       let liveForm = existingForm ?? null
 
-      try {
-        liveForm = (await fetchLiveFormFromTheSportsDb(team)) ?? existingForm ?? null
-      } catch {}
+      if (shouldRefreshForm) {
+        try {
+          liveForm = (await fetchLiveFormFromTheSportsDb(team)) ?? existingForm ?? null
+        } catch {}
+      }
 
       if (liveForm) {
         nextLiveTeamFormById[team.id] = liveForm
       }
 
-      let directoryEntry = null
+      let directoryEntry = existingDirectory ?? null
 
-      try {
-        directoryEntry = await fetchTeamDirectoryFromApiFootball(team)
-      } catch {}
+      if (shouldRefreshTeams) {
+        try {
+          directoryEntry = await fetchTeamDirectoryFromApiFootball(team)
+        } catch {}
+      }
 
-      if (directoryEntry?.players?.length) {
+      if (shouldRefreshTeams && directoryEntry?.players?.length) {
         providerStats.apiFootball += 1
       }
 
-      if ((!directoryEntry || !hasCompleteRoster(directoryEntry)) && footballDataTeams) {
+      if (shouldRefreshTeams && (!directoryEntry || !hasCompleteRoster(directoryEntry)) && footballDataTeams) {
         const matchedFootballDataTeam =
           footballDataTeams.find(
             (candidate) =>
@@ -1479,7 +1487,7 @@ async function refreshLiveTeamData(teams, currentLiveState) {
         }
       }
 
-      if (!directoryEntry || directoryEntry.players.length === 0) {
+      if (shouldRefreshTeams && (!directoryEntry || directoryEntry.players.length === 0)) {
         try {
           const sportsDbEntry = await fetchTeamDirectoryFromTheSportsDb(team)
 
@@ -1490,7 +1498,7 @@ async function refreshLiveTeamData(teams, currentLiveState) {
         } catch {}
       }
 
-      if (!hasCompleteRoster(directoryEntry)) {
+      if (shouldRefreshTeams && !hasCompleteRoster(directoryEntry)) {
         try {
           fifaBrowser = await getOrCreateFifaBrowser(fifaBrowser)
           const fifaEntry = await fetchFifaSquadFallback(team, fifaBrowser)
@@ -1504,9 +1512,9 @@ async function refreshLiveTeamData(teams, currentLiveState) {
         }
       }
 
-      if (directoryEntry) {
+      if (shouldRefreshTeams && directoryEntry) {
         nextTeamDirectoryById[team.id] = directoryEntry
-      } else if (existingDirectory) {
+      } else if (shouldRefreshTeams && existingDirectory) {
         nextTeamDirectoryById[team.id] = existingDirectory
       }
     }
@@ -1515,10 +1523,21 @@ async function refreshLiveTeamData(teams, currentLiveState) {
       liveTeamFormById: nextLiveTeamFormById,
       teamDirectoryById: nextTeamDirectoryById,
       refreshStatus: [
-        `API-Football supplied ${providerStats.apiFootball} team roster${providerStats.apiFootball === 1 ? '' : 's'}.`,
-        `football-data.org supplied ${providerStats.footballData} team roster${providerStats.footballData === 1 ? '' : 's'}.`,
-        `TheSportsDB supplied ${providerStats.theSportsDb} fallback roster${providerStats.theSportsDb === 1 ? '' : 's'}.`,
-        `FIFA squad fallback supplemented ${providerStats.fifa} team roster${providerStats.fifa === 1 ? '' : 's'}.`,
+        shouldRefreshForm
+          ? `Recent-form snapshots were refreshed for the requested teams.`
+          : 'Recent-form refresh was skipped in this pass.',
+        shouldRefreshTeams
+          ? `API-Football supplied ${providerStats.apiFootball} team roster${providerStats.apiFootball === 1 ? '' : 's'}.`
+          : 'API-Football roster refresh was skipped in this pass.',
+        shouldRefreshTeams
+          ? `football-data.org supplied ${providerStats.footballData} team roster${providerStats.footballData === 1 ? '' : 's'}.`
+          : 'football-data.org roster refresh was skipped in this pass.',
+        shouldRefreshTeams
+          ? `TheSportsDB supplied ${providerStats.theSportsDb} fallback roster${providerStats.theSportsDb === 1 ? '' : 's'}.`
+          : 'TheSportsDB roster fallback was skipped in this pass.',
+        shouldRefreshTeams
+          ? `FIFA squad fallback supplemented ${providerStats.fifa} team roster${providerStats.fifa === 1 ? '' : 's'}.`
+          : 'FIFA squad fallback was skipped in this pass.',
         ...providerMessages,
       ].join(' '),
     }
@@ -1799,6 +1818,9 @@ app.post('/api/live/provider/:providerKey/api-key', async (request, response) =>
 app.post('/api/live/refresh', async (request, response) => {
   try {
     const teams = Array.isArray(request.body?.teams) ? request.body.teams : []
+    const mode = request.body?.mode === 'form' || request.body?.mode === 'teams' || request.body?.mode === 'all'
+      ? request.body.mode
+      : 'all'
 
     if (teams.length === 0) {
       response.status(400).json({ message: 'A teams payload is required for live-data refresh.' })
@@ -1806,7 +1828,7 @@ app.post('/api/live/refresh', async (request, response) => {
     }
 
     liveState = await readLiveState()
-    const refreshed = await refreshLiveTeamData(teams, liveState)
+    const refreshed = await refreshLiveTeamData(teams, liveState, mode)
 
     liveState = {
       ...liveState,

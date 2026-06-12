@@ -436,8 +436,7 @@ type KnockoutMatchScheduleContext = KnockoutScheduleItem & {
 }
 
 type RawScheduleItem = {
-  date: string
-  et: string
+  kickoffUtc: string
   match: string
   venue: string
 }
@@ -572,100 +571,100 @@ const groupMatchTemplate: [number, number, string][] = [
 
 const groupScheduleSource: Record<string, RawScheduleItem[]> = {
   A: [
-    { date: 'Thu, Jun 11', et: '3:00 PM ET', match: 'Mexico vs South Africa', venue: 'Mexico City | Estadio Azteca' },
-    { date: 'Thu, Jun 11', et: '10:00 PM ET', match: 'Korea Republic vs Czechia', venue: 'Guadalajara | Estadio Akron' },
-    { date: 'Thu, Jun 18', et: '12:00 PM ET', match: 'Czechia vs South Africa', venue: 'Atlanta | Mercedes-Benz Stadium' },
-    { date: 'Thu, Jun 18', et: '11:00 PM ET', match: 'Mexico vs Korea Republic', venue: 'Guadalajara | Estadio Akron' },
-    { date: 'Wed, Jun 24', et: '9:00 PM ET', match: 'Czechia vs Mexico', venue: 'Mexico City | Estadio Azteca' },
-    { date: 'Wed, Jun 24', et: '9:00 PM ET', match: 'South Africa vs Korea Republic', venue: 'Monterrey | Estadio BBVA' },
+    { kickoffUtc: '2026-06-11T19:00:00.000Z', match: 'Mexico vs South Africa', venue: 'Mexico City | Estadio Azteca' },
+    { kickoffUtc: '2026-06-12T02:00:00.000Z', match: 'Korea Republic vs Czechia', venue: 'Guadalajara | Estadio Akron' },
+    { kickoffUtc: '2026-06-18T16:00:00.000Z', match: 'Czechia vs South Africa', venue: 'Atlanta | Mercedes-Benz Stadium' },
+    { kickoffUtc: '2026-06-19T01:00:00.000Z', match: 'Mexico vs Korea Republic', venue: 'Guadalajara | Estadio Akron' },
+    { kickoffUtc: '2026-06-25T01:00:00.000Z', match: 'Czechia vs Mexico', venue: 'Mexico City | Estadio Azteca' },
+    { kickoffUtc: '2026-06-25T01:00:00.000Z', match: 'South Africa vs Korea Republic', venue: 'Monterrey | Estadio BBVA' },
   ],
   B: [
-    { date: 'Fri, Jun 12', et: '3:00 PM ET', match: 'Canada vs Bosnia and Herzegovina', venue: 'Toronto | BMO Field' },
-    { date: 'Sat, Jun 13', et: '3:00 PM ET', match: 'Qatar vs Switzerland', venue: "San Francisco Bay Area | Levi's Stadium" },
-    { date: 'Thu, Jun 18', et: '3:00 PM ET', match: 'Switzerland vs Bosnia and Herzegovina', venue: 'Los Angeles | SoFi Stadium' },
-    { date: 'Thu, Jun 18', et: '6:00 PM ET', match: 'Canada vs Qatar', venue: 'Vancouver | BC Place' },
-    { date: 'Wed, Jun 24', et: '3:00 PM ET', match: 'Switzerland vs Canada', venue: 'Vancouver | BC Place' },
-    { date: 'Wed, Jun 24', et: '3:00 PM ET', match: 'Bosnia and Herzegovina vs Qatar', venue: 'Seattle | Lumen Field' },
+    { kickoffUtc: '2026-06-12T19:00:00.000Z', match: 'Canada vs Bosnia and Herzegovina', venue: 'Toronto | BMO Field' },
+    { kickoffUtc: '2026-06-13T19:00:00.000Z', match: 'Qatar vs Switzerland', venue: "San Francisco Bay Area | Levi's Stadium" },
+    { kickoffUtc: '2026-06-18T19:00:00.000Z', match: 'Switzerland vs Bosnia and Herzegovina', venue: 'Los Angeles | SoFi Stadium' },
+    { kickoffUtc: '2026-06-18T22:00:00.000Z', match: 'Canada vs Qatar', venue: 'Vancouver | BC Place' },
+    { kickoffUtc: '2026-06-24T19:00:00.000Z', match: 'Switzerland vs Canada', venue: 'Vancouver | BC Place' },
+    { kickoffUtc: '2026-06-24T19:00:00.000Z', match: 'Bosnia and Herzegovina vs Qatar', venue: 'Seattle | Lumen Field' },
   ],
   C: [
-    { date: 'Sat, Jun 13', et: '6:00 PM ET', match: 'Brazil vs Morocco', venue: 'New York/New Jersey | MetLife Stadium' },
-    { date: 'Sat, Jun 13', et: '9:00 PM ET', match: 'Haiti vs Scotland', venue: 'Boston | Gillette Stadium' },
-    { date: 'Fri, Jun 19', et: '6:00 PM ET', match: 'Scotland vs Morocco', venue: 'Boston | Gillette Stadium' },
-    { date: 'Fri, Jun 19', et: '9:00 PM ET', match: 'Brazil vs Haiti', venue: 'Philadelphia | Lincoln Financial Field' },
-    { date: 'Wed, Jun 24', et: '6:00 PM ET', match: 'Scotland vs Brazil', venue: 'Miami | Hard Rock Stadium' },
-    { date: 'Wed, Jun 24', et: '6:00 PM ET', match: 'Morocco vs Haiti', venue: 'Atlanta | Mercedes-Benz Stadium' },
+    { kickoffUtc: '2026-06-13T22:00:00.000Z', match: 'Brazil vs Morocco', venue: 'New York/New Jersey | MetLife Stadium' },
+    { kickoffUtc: '2026-06-14T01:00:00.000Z', match: 'Haiti vs Scotland', venue: 'Boston | Gillette Stadium' },
+    { kickoffUtc: '2026-06-19T22:00:00.000Z', match: 'Scotland vs Morocco', venue: 'Boston | Gillette Stadium' },
+    { kickoffUtc: '2026-06-20T00:30:00.000Z', match: 'Brazil vs Haiti', venue: 'Philadelphia | Lincoln Financial Field' },
+    { kickoffUtc: '2026-06-24T22:00:00.000Z', match: 'Scotland vs Brazil', venue: 'Miami | Hard Rock Stadium' },
+    { kickoffUtc: '2026-06-24T22:00:00.000Z', match: 'Morocco vs Haiti', venue: 'Atlanta | Mercedes-Benz Stadium' },
   ],
   D: [
-    { date: 'Fri, Jun 12', et: '9:00 PM ET', match: 'United States vs Paraguay', venue: 'Los Angeles | SoFi Stadium' },
-    { date: 'Sat, Jun 13', et: '12:00 AM ET', match: 'Australia vs Turkiye', venue: 'Vancouver | BC Place' },
-    { date: 'Fri, Jun 19', et: '3:00 PM ET', match: 'United States vs Australia', venue: 'Seattle | Lumen Field' },
-    { date: 'Fri, Jun 19', et: '12:00 AM ET', match: 'Turkiye vs Paraguay', venue: "San Francisco Bay Area | Levi's Stadium" },
-    { date: 'Thu, Jun 25', et: '10:00 PM ET', match: 'Turkiye vs United States', venue: 'Los Angeles | SoFi Stadium' },
-    { date: 'Thu, Jun 25', et: '10:00 PM ET', match: 'Paraguay vs Australia', venue: "San Francisco Bay Area | Levi's Stadium" },
+    { kickoffUtc: '2026-06-13T01:00:00.000Z', match: 'United States vs Paraguay', venue: 'Los Angeles | SoFi Stadium' },
+    { kickoffUtc: '2026-06-14T04:00:00.000Z', match: 'Australia vs Turkiye', venue: 'Vancouver | BC Place' },
+    { kickoffUtc: '2026-06-19T19:00:00.000Z', match: 'United States vs Australia', venue: 'Seattle | Lumen Field' },
+    { kickoffUtc: '2026-06-20T03:00:00.000Z', match: 'Turkiye vs Paraguay', venue: "San Francisco Bay Area | Levi's Stadium" },
+    { kickoffUtc: '2026-06-26T02:00:00.000Z', match: 'Turkiye vs United States', venue: 'Los Angeles | SoFi Stadium' },
+    { kickoffUtc: '2026-06-26T02:00:00.000Z', match: 'Paraguay vs Australia', venue: "San Francisco Bay Area | Levi's Stadium" },
   ],
   E: [
-    { date: 'Sun, Jun 14', et: '1:00 PM ET', match: 'Germany vs Curacao', venue: 'Houston | NRG Stadium' },
-    { date: 'Sun, Jun 14', et: '7:00 PM ET', match: 'Ivory Coast vs Ecuador', venue: 'Philadelphia | Lincoln Financial Field' },
-    { date: 'Sat, Jun 20', et: '4:00 PM ET', match: 'Germany vs Ivory Coast', venue: 'Toronto | BMO Field' },
-    { date: 'Sat, Jun 20', et: '8:00 PM ET', match: 'Ecuador vs Curacao', venue: 'Kansas City | Arrowhead Stadium' },
-    { date: 'Thu, Jun 25', et: '4:00 PM ET', match: 'Ecuador vs Germany', venue: 'New York/New Jersey | MetLife Stadium' },
-    { date: 'Thu, Jun 25', et: '4:00 PM ET', match: 'Curacao vs Ivory Coast', venue: 'Philadelphia | Lincoln Financial Field' },
+    { kickoffUtc: '2026-06-14T17:00:00.000Z', match: 'Germany vs Curacao', venue: 'Houston | NRG Stadium' },
+    { kickoffUtc: '2026-06-14T23:00:00.000Z', match: 'Ivory Coast vs Ecuador', venue: 'Philadelphia | Lincoln Financial Field' },
+    { kickoffUtc: '2026-06-20T20:00:00.000Z', match: 'Germany vs Ivory Coast', venue: 'Toronto | BMO Field' },
+    { kickoffUtc: '2026-06-21T00:00:00.000Z', match: 'Ecuador vs Curacao', venue: 'Kansas City | Arrowhead Stadium' },
+    { kickoffUtc: '2026-06-25T20:00:00.000Z', match: 'Ecuador vs Germany', venue: 'New York/New Jersey | MetLife Stadium' },
+    { kickoffUtc: '2026-06-25T20:00:00.000Z', match: 'Curacao vs Ivory Coast', venue: 'Philadelphia | Lincoln Financial Field' },
   ],
   F: [
-    { date: 'Sun, Jun 14', et: '4:00 PM ET', match: 'Netherlands vs Japan', venue: 'Dallas | AT&T Stadium' },
-    { date: 'Sun, Jun 14', et: '10:00 PM ET', match: 'Sweden vs Tunisia', venue: 'Monterrey | Estadio BBVA' },
-    { date: 'Sat, Jun 20', et: '1:00 PM ET', match: 'Netherlands vs Sweden', venue: 'Houston | NRG Stadium' },
-    { date: 'Sat, Jun 20', et: '12:00 AM ET', match: 'Tunisia vs Japan', venue: 'Monterrey | Estadio BBVA' },
-    { date: 'Thu, Jun 25', et: '7:00 PM ET', match: 'Japan vs Sweden', venue: 'Dallas | AT&T Stadium' },
-    { date: 'Thu, Jun 25', et: '7:00 PM ET', match: 'Tunisia vs Netherlands', venue: 'Kansas City | Arrowhead Stadium' },
+    { kickoffUtc: '2026-06-14T20:00:00.000Z', match: 'Netherlands vs Japan', venue: 'Dallas | AT&T Stadium' },
+    { kickoffUtc: '2026-06-15T02:00:00.000Z', match: 'Sweden vs Tunisia', venue: 'Monterrey | Estadio BBVA' },
+    { kickoffUtc: '2026-06-20T17:00:00.000Z', match: 'Netherlands vs Sweden', venue: 'Houston | NRG Stadium' },
+    { kickoffUtc: '2026-06-21T04:00:00.000Z', match: 'Tunisia vs Japan', venue: 'Monterrey | Estadio BBVA' },
+    { kickoffUtc: '2026-06-25T23:00:00.000Z', match: 'Japan vs Sweden', venue: 'Dallas | AT&T Stadium' },
+    { kickoffUtc: '2026-06-25T23:00:00.000Z', match: 'Tunisia vs Netherlands', venue: 'Kansas City | Arrowhead Stadium' },
   ],
   G: [
-    { date: 'Mon, Jun 15', et: '6:00 PM ET', match: 'Belgium vs Egypt', venue: 'Seattle | Lumen Field' },
-    { date: 'Mon, Jun 15', et: '12:00 AM ET', match: 'Iran vs New Zealand', venue: 'Los Angeles | SoFi Stadium' },
-    { date: 'Sun, Jun 21', et: '3:00 PM ET', match: 'Belgium vs Iran', venue: 'Los Angeles | SoFi Stadium' },
-    { date: 'Sun, Jun 21', et: '9:00 PM ET', match: 'New Zealand vs Egypt', venue: 'Vancouver | BC Place' },
-    { date: 'Fri, Jun 26', et: '11:00 PM ET', match: 'Egypt vs Iran', venue: 'Seattle | Lumen Field' },
-    { date: 'Fri, Jun 26', et: '11:00 PM ET', match: 'New Zealand vs Belgium', venue: 'Vancouver | BC Place' },
+    { kickoffUtc: '2026-06-15T19:00:00.000Z', match: 'Belgium vs Egypt', venue: 'Seattle | Lumen Field' },
+    { kickoffUtc: '2026-06-16T01:00:00.000Z', match: 'Iran vs New Zealand', venue: 'Los Angeles | SoFi Stadium' },
+    { kickoffUtc: '2026-06-21T19:00:00.000Z', match: 'Belgium vs Iran', venue: 'Los Angeles | SoFi Stadium' },
+    { kickoffUtc: '2026-06-22T01:00:00.000Z', match: 'New Zealand vs Egypt', venue: 'Vancouver | BC Place' },
+    { kickoffUtc: '2026-06-27T03:00:00.000Z', match: 'Egypt vs Iran', venue: 'Seattle | Lumen Field' },
+    { kickoffUtc: '2026-06-27T03:00:00.000Z', match: 'New Zealand vs Belgium', venue: 'Vancouver | BC Place' },
   ],
   H: [
-    { date: 'Mon, Jun 15', et: '1:00 PM ET', match: 'Spain vs Cape Verde', venue: 'Atlanta | Mercedes-Benz Stadium' },
-    { date: 'Mon, Jun 15', et: '6:00 PM ET', match: 'Saudi Arabia vs Uruguay', venue: 'Miami | Hard Rock Stadium' },
-    { date: 'Sun, Jun 21', et: '12:00 PM ET', match: 'Spain vs Saudi Arabia', venue: 'Atlanta | Mercedes-Benz Stadium' },
-    { date: 'Sun, Jun 21', et: '6:00 PM ET', match: 'Uruguay vs Cape Verde', venue: 'Miami | Hard Rock Stadium' },
-    { date: 'Fri, Jun 26', et: '8:00 PM ET', match: 'Cape Verde vs Saudi Arabia', venue: 'Houston | NRG Stadium' },
-    { date: 'Fri, Jun 26', et: '8:00 PM ET', match: 'Uruguay vs Spain', venue: 'Guadalajara | Estadio Akron' },
+    { kickoffUtc: '2026-06-15T16:00:00.000Z', match: 'Spain vs Cape Verde', venue: 'Atlanta | Mercedes-Benz Stadium' },
+    { kickoffUtc: '2026-06-15T22:00:00.000Z', match: 'Saudi Arabia vs Uruguay', venue: 'Miami | Hard Rock Stadium' },
+    { kickoffUtc: '2026-06-21T16:00:00.000Z', match: 'Spain vs Saudi Arabia', venue: 'Atlanta | Mercedes-Benz Stadium' },
+    { kickoffUtc: '2026-06-21T22:00:00.000Z', match: 'Uruguay vs Cape Verde', venue: 'Miami | Hard Rock Stadium' },
+    { kickoffUtc: '2026-06-27T00:00:00.000Z', match: 'Cape Verde vs Saudi Arabia', venue: 'Houston | NRG Stadium' },
+    { kickoffUtc: '2026-06-27T00:00:00.000Z', match: 'Uruguay vs Spain', venue: 'Guadalajara | Estadio Akron' },
   ],
   I: [
-    { date: 'Tue, Jun 16', et: '3:00 PM ET', match: 'France vs Senegal', venue: 'New York/New Jersey | MetLife Stadium' },
-    { date: 'Tue, Jun 16', et: '6:00 PM ET', match: 'Iraq vs Norway', venue: 'Boston | Gillette Stadium' },
-    { date: 'Mon, Jun 22', et: '5:00 PM ET', match: 'France vs Iraq', venue: 'Philadelphia | Lincoln Financial Field' },
-    { date: 'Mon, Jun 22', et: '8:00 PM ET', match: 'Norway vs Senegal', venue: 'New York/New Jersey | MetLife Stadium' },
-    { date: 'Fri, Jun 26', et: '3:00 PM ET', match: 'Norway vs France', venue: 'Boston | Gillette Stadium' },
-    { date: 'Fri, Jun 26', et: '3:00 PM ET', match: 'Senegal vs Iraq', venue: 'Toronto | BMO Field' },
+    { kickoffUtc: '2026-06-16T19:00:00.000Z', match: 'France vs Senegal', venue: 'New York/New Jersey | MetLife Stadium' },
+    { kickoffUtc: '2026-06-16T22:00:00.000Z', match: 'Iraq vs Norway', venue: 'Boston | Gillette Stadium' },
+    { kickoffUtc: '2026-06-22T21:00:00.000Z', match: 'France vs Iraq', venue: 'Philadelphia | Lincoln Financial Field' },
+    { kickoffUtc: '2026-06-23T00:00:00.000Z', match: 'Norway vs Senegal', venue: 'New York/New Jersey | MetLife Stadium' },
+    { kickoffUtc: '2026-06-26T19:00:00.000Z', match: 'Norway vs France', venue: 'Boston | Gillette Stadium' },
+    { kickoffUtc: '2026-06-26T19:00:00.000Z', match: 'Senegal vs Iraq', venue: 'Toronto | BMO Field' },
   ],
   J: [
-    { date: 'Tue, Jun 16', et: '9:00 PM ET', match: 'Argentina vs Algeria', venue: 'Kansas City | Arrowhead Stadium' },
-    { date: 'Tue, Jun 16', et: '12:00 AM ET', match: 'Austria vs Jordan', venue: "San Francisco Bay Area | Levi's Stadium" },
-    { date: 'Mon, Jun 22', et: '1:00 PM ET', match: 'Argentina vs Austria', venue: 'Dallas | AT&T Stadium' },
-    { date: 'Mon, Jun 22', et: '11:00 PM ET', match: 'Jordan vs Algeria', venue: "San Francisco Bay Area | Levi's Stadium" },
-    { date: 'Sat, Jun 27', et: '10:00 PM ET', match: 'Algeria vs Austria', venue: 'Kansas City | Arrowhead Stadium' },
-    { date: 'Sat, Jun 27', et: '10:00 PM ET', match: 'Jordan vs Argentina', venue: 'Dallas | AT&T Stadium' },
+    { kickoffUtc: '2026-06-17T01:00:00.000Z', match: 'Argentina vs Algeria', venue: 'Kansas City | Arrowhead Stadium' },
+    { kickoffUtc: '2026-06-17T04:00:00.000Z', match: 'Austria vs Jordan', venue: "San Francisco Bay Area | Levi's Stadium" },
+    { kickoffUtc: '2026-06-22T17:00:00.000Z', match: 'Argentina vs Austria', venue: 'Dallas | AT&T Stadium' },
+    { kickoffUtc: '2026-06-23T03:00:00.000Z', match: 'Jordan vs Algeria', venue: "San Francisco Bay Area | Levi's Stadium" },
+    { kickoffUtc: '2026-06-28T02:00:00.000Z', match: 'Algeria vs Austria', venue: 'Kansas City | Arrowhead Stadium' },
+    { kickoffUtc: '2026-06-28T02:00:00.000Z', match: 'Jordan vs Argentina', venue: 'Dallas | AT&T Stadium' },
   ],
   K: [
-    { date: 'Wed, Jun 17', et: '1:00 PM ET', match: 'Portugal vs DR Congo', venue: 'Houston | NRG Stadium' },
-    { date: 'Wed, Jun 17', et: '10:00 PM ET', match: 'Uzbekistan vs Colombia', venue: 'Mexico City | Estadio Azteca' },
-    { date: 'Tue, Jun 23', et: '1:00 PM ET', match: 'Portugal vs Uzbekistan', venue: 'Houston | NRG Stadium' },
-    { date: 'Tue, Jun 23', et: '10:00 PM ET', match: 'Colombia vs DR Congo', venue: 'Guadalajara | Estadio Akron' },
-    { date: 'Sat, Jun 27', et: '7:30 PM ET', match: 'Colombia vs Portugal', venue: 'Miami | Hard Rock Stadium' },
-    { date: 'Sat, Jun 27', et: '7:30 PM ET', match: 'DR Congo vs Uzbekistan', venue: 'Atlanta | Mercedes-Benz Stadium' },
+    { kickoffUtc: '2026-06-17T17:00:00.000Z', match: 'Portugal vs DR Congo', venue: 'Houston | NRG Stadium' },
+    { kickoffUtc: '2026-06-18T02:00:00.000Z', match: 'Uzbekistan vs Colombia', venue: 'Mexico City | Estadio Azteca' },
+    { kickoffUtc: '2026-06-23T17:00:00.000Z', match: 'Portugal vs Uzbekistan', venue: 'Houston | NRG Stadium' },
+    { kickoffUtc: '2026-06-24T02:00:00.000Z', match: 'Colombia vs DR Congo', venue: 'Guadalajara | Estadio Akron' },
+    { kickoffUtc: '2026-06-27T23:30:00.000Z', match: 'Colombia vs Portugal', venue: 'Miami | Hard Rock Stadium' },
+    { kickoffUtc: '2026-06-27T23:30:00.000Z', match: 'DR Congo vs Uzbekistan', venue: 'Atlanta | Mercedes-Benz Stadium' },
   ],
   L: [
-    { date: 'Wed, Jun 17', et: '4:00 PM ET', match: 'England vs Croatia', venue: 'Dallas | AT&T Stadium' },
-    { date: 'Wed, Jun 17', et: '7:00 PM ET', match: 'Ghana vs Panama', venue: 'Toronto | BMO Field' },
-    { date: 'Tue, Jun 23', et: '4:00 PM ET', match: 'England vs Ghana', venue: 'Boston | Gillette Stadium' },
-    { date: 'Tue, Jun 23', et: '7:00 PM ET', match: 'Panama vs Croatia', venue: 'Toronto | BMO Field' },
-    { date: 'Sat, Jun 27', et: '5:00 PM ET', match: 'Panama vs England', venue: 'New York/New Jersey | MetLife Stadium' },
-    { date: 'Sat, Jun 27', et: '5:00 PM ET', match: 'Croatia vs Ghana', venue: 'Philadelphia | Lincoln Financial Field' },
+    { kickoffUtc: '2026-06-17T20:00:00.000Z', match: 'England vs Croatia', venue: 'Dallas | AT&T Stadium' },
+    { kickoffUtc: '2026-06-17T23:00:00.000Z', match: 'Ghana vs Panama', venue: 'Toronto | BMO Field' },
+    { kickoffUtc: '2026-06-23T20:00:00.000Z', match: 'England vs Ghana', venue: 'Boston | Gillette Stadium' },
+    { kickoffUtc: '2026-06-23T23:00:00.000Z', match: 'Panama vs Croatia', venue: 'Toronto | BMO Field' },
+    { kickoffUtc: '2026-06-27T21:00:00.000Z', match: 'Panama vs England', venue: 'New York/New Jersey | MetLife Stadium' },
+    { kickoffUtc: '2026-06-27T21:00:00.000Z', match: 'Croatia vs Ghana', venue: 'Philadelphia | Lincoln Financial Field' },
   ],
 }
 
@@ -880,7 +879,7 @@ const defaultMarketApiState: MarketApiState = {
 const defaultRefreshFeedback: RefreshFeedback = {
   kind: 'idle',
   title: 'No refresh is running right now.',
-  details: ['Use `Refresh Live Data` for team data and `Refresh Bets` for bookmaker odds and results.'],
+  details: ['Use `Refresh Live Data` for form, `Refresh Teams` for rosters, and `Refresh Bets` for bookmaker odds and results.'],
 }
 
 const phaseAwardDefinitions: { key: PhaseAwardKey; title: string; description: string }[] = [
@@ -927,7 +926,7 @@ const defaultLiveDataState: LiveDataState = {
   liveTeamFormById: {},
   teamDirectoryById: {},
   latestRefreshAt: undefined,
-  refreshStatus: 'Refresh Live Data will load team data through backend providers.',
+  refreshStatus: 'Refresh Live Data loads recent form, while Refresh Teams loads squad and roster data through backend providers.',
   providers: {
     apiFootball: {
       configured: false,
@@ -1278,42 +1277,6 @@ const knockoutStageConfigStatic: { stage: KnockoutStage; title: string; subtitle
   { stage: 'final', title: 'Final', subtitle: 'The tournament decider.' },
 ]
 
-function parseEtDateTime(dateLabel: string, etLabel: string) {
-  const monthMap: Record<string, number> = {
-    Jan: 0,
-    Feb: 1,
-    Mar: 2,
-    Apr: 3,
-    May: 4,
-    Jun: 5,
-    Jul: 6,
-    Aug: 7,
-    Sep: 8,
-    Oct: 9,
-    Nov: 10,
-    Dec: 11,
-  }
-
-  const dateMatch = dateLabel.match(/^[A-Za-z]{3}, ([A-Za-z]{3}) (\d{1,2})$/)
-  const timeMatch = etLabel.match(/^(\d{1,2}):(\d{2}) (AM|PM) ET$/)
-
-  if (!dateMatch || !timeMatch) {
-    throw new Error(`Unsupported schedule format: ${dateLabel} ${etLabel}`)
-  }
-
-  const month = monthMap[dateMatch[1]]
-  const day = Number(dateMatch[2])
-  let hours = Number(timeMatch[1]) % 12
-  const minutes = Number(timeMatch[2])
-
-  if (timeMatch[3] === 'PM') {
-    hours += 12
-  }
-
-  // Group-stage dates fall in daylight saving time, so ET is UTC-4.
-  return new Date(Date.UTC(2026, month, day, hours + 4, minutes))
-}
-
 function parseVenueLocalDateTime(dateIso: string, localTime: string, venueCity: string) {
   const venueMeta = venueMetaByCity[venueCity]
 
@@ -1403,6 +1366,13 @@ function formatActualResultLabel(actualResult?: ActualResultSnapshot) {
     return 'Final'
   }
 
+  if (
+    Number.isFinite(actualResult.homeGoals) &&
+    Number.isFinite(actualResult.awayGoals)
+  ) {
+    return 'Final'
+  }
+
   return ''
 }
 
@@ -1451,7 +1421,7 @@ function createInitialMatches(): Match[] {
 
     return groupMatchTemplate.map(([homeIndex, awayIndex, kickoffLabel], roundIndex) => {
       const scheduleItem = groupScheduleSource[groupDefinition.name][roundIndex]
-      const kickoff = parseEtDateTime(scheduleItem.date, scheduleItem.et)
+      const kickoff = new Date(scheduleItem.kickoffUtc)
       const [venueCity, stadium] = scheduleItem.venue.split('|').map((part) => part.trim())
       const venueMeta = venueMetaByCity[venueCity]
       const localTimeZone = venueMeta?.timeZone ?? 'UTC'
@@ -1763,13 +1733,13 @@ async function fetchLiveDataStateFromBackend() {
   return normalizeLiveDataState((await response.json()) as Partial<LiveDataState>)
 }
 
-async function refreshLiveDataInBackend(teams: Team[]) {
+async function refreshLiveDataInBackend(teams: Team[], mode: 'all' | 'form' | 'teams' = 'all') {
   const response = await fetch('/api/live/refresh', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ teams }),
+    body: JSON.stringify({ teams, mode }),
   })
 
   if (!response.ok) {
@@ -3800,9 +3770,10 @@ function App() {
   const [liveDataState, setLiveDataState] = useState<LiveDataState>(defaultLiveDataState)
   const [marketApiState, setMarketApiState] = useState<MarketApiState>(defaultMarketApiState)
   const [isRefreshingLiveData, setIsRefreshingLiveData] = useState(false)
+  const [isRefreshingTeams, setIsRefreshingTeams] = useState(false)
   const [refreshingTeamId, setRefreshingTeamId] = useState<string | null>(null)
   const [isRefreshingBets, setIsRefreshingBets] = useState(false)
-  const [liveRefreshStatus, setLiveRefreshStatus] = useState('Use Refresh Live Data to load missing or stale national-team snapshots and squad information.')
+  const [liveRefreshStatus, setLiveRefreshStatus] = useState('Use Refresh Live Data for recent form and Refresh Teams for squad information.')
   const [sourcePickerSlotKey, setSourcePickerSlotKey] = useState<BrokerSlotKey | null>(null)
   const [refreshFeedback, setRefreshFeedback] = useState<RefreshFeedback>(defaultRefreshFeedback)
   const [backendConnectionStatus, setBackendConnectionStatus] = useState<BackendConnectionStatus>('checking')
@@ -4446,51 +4417,46 @@ function App() {
   }, [liveMarketTargetsKey, liveMarketTargetsSerialized, marketApiState.apiKeyConfigured])
 
   async function handleRefreshLiveData() {
-    if (teamRefreshTargets.length === 0) {
-      setLiveRefreshStatus('All saved team snapshots are still fresh. No new federation data had to be downloaded.')
+    if (teamsNeedingLiveFormRefresh.length === 0) {
+      setLiveRefreshStatus('All saved live-form snapshots are still fresh. No new recent-results data had to be downloaded.')
       setRefreshFeedback({
         kind: 'success',
-        title: 'Team data is already up to date.',
+        title: 'Live form data is already up to date.',
         details: [
           `Live form snapshots already cover ${allTeams.length} of ${allTeams.length} teams inside the freshness window.`,
-          `Roster snapshots already cover ${allTeams.length} of ${allTeams.length} teams inside the freshness window and do not need an upgrade pass.`,
+          `Team rosters were not refreshed in this pass.`,
         ],
       })
       return
     }
 
     setIsRefreshingLiveData(true)
-    setLiveRefreshStatus('Refreshing public federation data for teams with missing or stale snapshots...')
+    setLiveRefreshStatus('Refreshing recent form for teams with missing or stale snapshots...')
     setRefreshFeedback({
       kind: 'loading',
-      title: 'Refreshing live team data...',
+      title: 'Refreshing live form data...',
       details: [
-        `Backend providers are being queried for ${teamsNeedingDirectoryRefresh.length} teams with missing, stale or partial squad data.`,
         `Public recent-results refresh is being checked for ${teamsNeedingLiveFormRefresh.length} teams.`,
+        'Team roster providers are skipped in this pass.',
       ],
     })
 
     try {
-      const nextLiveDataState = await refreshLiveDataInBackend(teamRefreshTargets)
+      const nextLiveDataState = await refreshLiveDataInBackend(teamsNeedingLiveFormRefresh, 'form')
       setLiveDataState(nextLiveDataState)
       setLiveTeamForm((currentValue) => ({ ...currentValue, ...nextLiveDataState.liveTeamFormById }))
-      setTeamDirectory((currentValue) => ({ ...currentValue, ...nextLiveDataState.teamDirectoryById }))
       setLiveRefreshStatus(nextLiveDataState.refreshStatus)
 
       setRefreshFeedback({
         kind: 'success',
-        title: 'Team data refreshed successfully.',
+        title: 'Live form data refreshed successfully.',
         details: [
           Object.keys(nextLiveDataState.liveTeamFormById).length > 0
             ? `Live team form cache now covers ${Object.keys(nextLiveDataState.liveTeamFormById).length} teams.`
             : teamsNeedingLiveFormRefresh.length > 0
               ? 'Live team form did not return any new team snapshots.'
               : 'All recent-form snapshots were already fresh.',
-          Object.keys(nextLiveDataState.teamDirectoryById).length > 0
-            ? `Team roster cache now covers ${Object.keys(nextLiveDataState.teamDirectoryById).length} teams.`
-            : teamsNeedingDirectoryRefresh.length > 0
-              ? 'Team roster provider did not return any new squad snapshots.'
-              : 'All roster snapshots were already fresh.',
+          'Team rosters were not refreshed in this pass.',
           nextLiveDataState.providers.apiFootball.status,
         ],
       })
@@ -4502,6 +4468,59 @@ function App() {
       })
     } finally {
       setIsRefreshingLiveData(false)
+    }
+  }
+
+  async function handleRefreshTeams() {
+    if (teamsNeedingDirectoryRefresh.length === 0) {
+      setLiveRefreshStatus('All saved team rosters are still fresh. No new squad data had to be downloaded.')
+      setRefreshFeedback({
+        kind: 'success',
+        title: 'Team rosters are already up to date.',
+        details: [
+          `Roster snapshots already cover ${allTeams.length} of ${allTeams.length} teams inside the freshness window.`,
+          'Live form was not refreshed in this pass.',
+        ],
+      })
+      return
+    }
+
+    setIsRefreshingTeams(true)
+    setLiveRefreshStatus('Refreshing team rosters for teams with missing, stale or partial squad data...')
+    setRefreshFeedback({
+      kind: 'loading',
+      title: 'Refreshing team rosters...',
+      details: [
+        `Backend providers are being queried for ${teamsNeedingDirectoryRefresh.length} teams with missing, stale or partial squad data.`,
+        'Recent-form refresh is skipped in this pass.',
+      ],
+    })
+
+    try {
+      const nextLiveDataState = await refreshLiveDataInBackend(teamsNeedingDirectoryRefresh, 'teams')
+      setLiveDataState(nextLiveDataState)
+      setTeamDirectory((currentValue) => ({ ...currentValue, ...nextLiveDataState.teamDirectoryById }))
+      setLiveRefreshStatus(nextLiveDataState.refreshStatus)
+
+      setRefreshFeedback({
+        kind: 'success',
+        title: 'Team rosters refreshed successfully.',
+        details: [
+          Object.keys(nextLiveDataState.teamDirectoryById).length > 0
+            ? `Team roster cache now covers ${Object.keys(nextLiveDataState.teamDirectoryById).length} teams.`
+            : 'Team roster provider did not return any new squad snapshots.',
+          'Live form was not refreshed in this pass.',
+          nextLiveDataState.providers.apiFootball.status,
+        ],
+      })
+    } catch (error) {
+      setRefreshFeedback({
+        kind: 'error',
+        title: 'Team roster refresh failed.',
+        details: [getErrorMessage(error)],
+      })
+    } finally {
+      setIsRefreshingTeams(false)
     }
   }
 
@@ -4518,9 +4537,8 @@ function App() {
     })
 
     try {
-      const nextLiveDataState = await refreshLiveDataInBackend([team])
+      const nextLiveDataState = await refreshLiveDataInBackend([team], 'teams')
       setLiveDataState(nextLiveDataState)
-      setLiveTeamForm((currentValue) => ({ ...currentValue, ...nextLiveDataState.liveTeamFormById }))
       setTeamDirectory((currentValue) => ({ ...currentValue, ...nextLiveDataState.teamDirectoryById }))
       setLiveRefreshStatus(nextLiveDataState.refreshStatus)
       setRefreshFeedback({
@@ -4947,8 +4965,8 @@ function App() {
     setLiveDataState(nextState)
     setLiveProviderKeyStatus(
       providerKey === 'api-football'
-        ? 'API-Football key accepted. Refresh Live Data to load richer squads.'
-        : 'football-data.org key accepted. Refresh Live Data to use it as a secondary provider.',
+        ? 'API-Football key accepted. Use Refresh Teams to load richer squads.'
+        : 'football-data.org key accepted. Use Refresh Teams to load it as a secondary provider.',
     )
 
     if (providerKey === 'api-football') {
@@ -5954,7 +5972,10 @@ function App() {
           </article>
           <div className="hero-button-stack">
             <button type="button" className="secondary-button hero-action-button" onClick={() => void handleRefreshLiveData()} disabled={isRefreshingLiveData}>
-              {isRefreshingLiveData ? 'Refreshing live data...' : 'Refresh Live Data'}
+              {isRefreshingLiveData ? 'Refreshing live form...' : 'Refresh Live Data'}
+            </button>
+            <button type="button" className="secondary-button hero-action-button" onClick={() => void handleRefreshTeams()} disabled={isRefreshingTeams}>
+              {isRefreshingTeams ? 'Refreshing teams...' : 'Refresh Teams'}
             </button>
             <button type="button" className="secondary-button hero-action-button" onClick={() => void handleRefreshBets()} disabled={isRefreshingBets}>
               {isRefreshingBets ? 'Refreshing bets...' : 'Refresh Bets'}
@@ -6993,7 +7014,7 @@ function App() {
             </div>
             <p className="teams-toolbar-note">
               Ranking order currently uses the app strength seed until a dedicated FIFA ranking feed is connected.
-              {' '}Use <strong>Refresh Live Data</strong> whenever a squad is empty or its snapshot is older than 12 hours.
+              {' '}Use <strong>Refresh Teams</strong> whenever a squad is empty or its snapshot is older than 12 hours.
             </p>
           </div>
 
@@ -7030,7 +7051,7 @@ function App() {
                       type="button"
                       className="secondary-button compact-button"
                       onClick={() => void handleRefreshSingleTeam(activeTeam)}
-                      disabled={refreshingTeamId === activeTeam.id || isRefreshingLiveData}
+                      disabled={refreshingTeamId === activeTeam.id || isRefreshingTeams}
                     >
                       {refreshingTeamId === activeTeam.id ? 'Refreshing team...' : 'Refresh this team'}
                     </button>
@@ -7088,7 +7109,7 @@ function App() {
 
                 <div className="team-description-box">
                   <strong>Team note</strong>
-                  <p>{activeTeamDirectory?.description ? activeTeamDirectory.description.slice(0, 340) : 'Roster and federation metadata will appear here after the live data refresh completes.'}</p>
+                  <p>{activeTeamDirectory?.description ? activeTeamDirectory.description.slice(0, 340) : 'Roster and federation metadata will appear here after the team refresh completes.'}</p>
                 </div>
               </article>
 
@@ -7207,7 +7228,7 @@ function App() {
               </>
             ) : (
               <p className="team-empty-state">
-                No roster is loaded for this team yet. Use <strong>Refresh Live Data</strong> to fetch the latest public squad snapshot.
+                No roster is loaded for this team yet. Use <strong>Refresh Teams</strong> to fetch the latest public squad snapshot.
               </p>
             )}
           </article>
